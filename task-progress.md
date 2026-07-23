@@ -1,0 +1,15 @@
+- [x] Analyze existing codebase architecture
+- [x] Understand current request lifecycle
+- [x] Identify gaps: client location not captured, no proximity-based mechanic matching
+- [x] Add client_lat/client_lng columns schema
+- [x] Add haversine helper to bootstrap.php
+- [x] Update RequestFormPage to capture client geolocation
+- [x] Update MechanicDashboardPage to show distance from client
+- [x] Update MechanicOrdersPage to show distance from client
+- [x] Delete expired requests entirely after 30 seconds (no trace in DB)
+- [x] Update NearbyMechanicsPage to handle deleted requests gracefully
+- [x] Remove stale "expired" status references
+- [x] **REMOVED auto-assignment** — requests now always created with mechanic_id=NULL (all mechanics compete)
+- [x] **First-come-first-serve** — accept endpoint uses atomic UPDATE WHERE mechanic_id IS NULL (prevents double-accept)
+- [x] **30s visibility window** — GET /requests for mechanics only returns pending requests < 30 seconds old
+- [x] Fix TypeScript errors (total_reviews type, t() calls)

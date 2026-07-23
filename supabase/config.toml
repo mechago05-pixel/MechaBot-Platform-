@@ -1,0 +1,4 @@
+project_id = "gxdczdarmymiombtxkit"
+
+[functions.voice-diagnose]
+verify_jwt = false
