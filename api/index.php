@@ -1,9 +1,12 @@
 <?php
+
 declare(strict_types=1);
 require __DIR__ . '/bootstrap.php';
 
 $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
-if (in_array($origin, ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:8080', 'http://127.0.0.1:8080'], true)) {
+$configuredOrigins = array_filter(array_map('trim', explode(',', (string) env_value('CORS_ORIGINS', ''))));
+$allowedOrigins = array_merge(['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:8080', 'http://127.0.0.1:8080'], $configuredOrigins);
+if (in_array($origin, $allowedOrigins, true)) {
     header("Access-Control-Allow-Origin: $origin");
     header('Access-Control-Allow-Credentials: true');
     header('Vary: Origin');
@@ -58,8 +61,14 @@ if ($method === 'POST' && $path === 'auth/login') {
     respond(['data' => ['user' => $user]]);
 }
 
-if ($method === 'POST' && $path === 'auth/logout') { $_SESSION = []; session_destroy(); respond(['data' => []]); }
-if ($method === 'GET' && $path === 'auth/me') { respond(['data' => ['user' => current_user()]]); }
+if ($method === 'POST' && $path === 'auth/logout') {
+    $_SESSION = [];
+    session_destroy();
+    respond(['data' => []]);
+}
+if ($method === 'GET' && $path === 'auth/me') {
+    respond(['data' => ['user' => current_user()]]);
+}
 
 if ($method === 'GET' && $path === 'mechanics/me') {
     $user = current_user();
@@ -77,18 +86,27 @@ if ($method === 'GET' && $path === 'mechanics') {
     $specialty = trim((string)($_GET['specialty'] ?? ''));
     $sql = 'SELECT m.id, m.user_id, m.full_name, m.phone, m.specialties, m.garage_location, m.profile_image_url, m.rating, m.total_reviews, m.experience_years, m.tier, m.is_online, m.availability_status, m.lat, m.lng, l.latitude, l.longitude FROM mechanic_profiles m LEFT JOIN mechanic_locations l ON l.mechanic_id = m.id WHERE m.approval_status = "approved" AND m.is_blocked = 0';
     $params = [];
-    if ($specialty !== '') { $sql .= ' AND JSON_CONTAINS(m.specialties, JSON_QUOTE(?))'; $params[] = $specialty; }
+    if ($specialty !== '') {
+        $sql .= ' AND JSON_CONTAINS(m.specialties, JSON_QUOTE(?))';
+        $params[] = $specialty;
+    }
     $sql .= ' ORDER BY m.is_online DESC, m.rating DESC, m.created_at DESC';
-    $stmt = db()->prepare($sql); $stmt->execute($params); $rows = $stmt->fetchAll();
+    $stmt = db()->prepare($sql);
+    $stmt->execute($params);
+    $rows = $stmt->fetchAll();
     foreach ($rows as &$row) $row['specialties'] = json_decode($row['specialties'] ?? '[]', true) ?: [];
     respond(['data' => $rows]);
 }
 
 if ($method === 'POST' && $path === 'mechanics/me/location') {
-    $mechanic = require_role('mechanic'); $data = json_input();
-    $lat = filter_var($data['latitude'] ?? null, FILTER_VALIDATE_FLOAT); $lng = filter_var($data['longitude'] ?? null, FILTER_VALIDATE_FLOAT);
+    $mechanic = require_role('mechanic');
+    $data = json_input();
+    $lat = filter_var($data['latitude'] ?? null, FILTER_VALIDATE_FLOAT);
+    $lng = filter_var($data['longitude'] ?? null, FILTER_VALIDATE_FLOAT);
     if ($lat === false || $lng === false || $lat < -90 || $lat > 90 || $lng < -180 || $lng > 180) fail('Invalid location');
-    $profile = db()->prepare('SELECT id FROM mechanic_profiles WHERE user_id = ? AND approval_status = "approved" AND is_blocked = 0'); $profile->execute([$mechanic['id']]); $profileId = $profile->fetchColumn();
+    $profile = db()->prepare('SELECT id FROM mechanic_profiles WHERE user_id = ? AND approval_status = "approved" AND is_blocked = 0');
+    $profile->execute([$mechanic['id']]);
+    $profileId = $profile->fetchColumn();
     if (!$profileId) fail('Your mechanic account is not approved', 403);
     db()->prepare('INSERT INTO mechanic_locations (id, mechanic_id, latitude, longitude) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE latitude = VALUES(latitude), longitude = VALUES(longitude)')->execute([uuid(), $profileId, $lat, $lng]);
     db()->prepare('UPDATE mechanic_profiles SET lat = ?, lng = ? WHERE id = ?')->execute([$lat, $lng, $profileId]);
@@ -96,7 +114,9 @@ if ($method === 'POST' && $path === 'mechanics/me/location') {
 }
 
 if ($method === 'POST' && $path === 'mechanics/me/availability') {
-    $mechanic = require_role('mechanic'); $data = json_input(); $online = !empty($data['is_online']) ? 1 : 0;
+    $mechanic = require_role('mechanic');
+    $data = json_input();
+    $online = !empty($data['is_online']) ? 1 : 0;
     db()->prepare('UPDATE mechanic_profiles SET is_online = ?, availability_status = ? WHERE user_id = ?')->execute([$online, $online ? 'available' : 'offline', $mechanic['id']]);
     respond(['data' => ['is_online' => (bool)$online]]);
 }
@@ -151,7 +171,7 @@ if ($method === 'POST' && $path === 'requests') {
     $clientLat = filter_var($data['client_lat'] ?? null, FILTER_VALIDATE_FLOAT);
     $clientLng = filter_var($data['client_lng'] ?? null, FILTER_VALIDATE_FLOAT);
     if (mb_strlen($description) > 1000 || ($carYear !== null && (strlen($carYear) !== 4 || (int)$carYear < 1886 || (int)$carYear > ((int)date('Y') + 1)))) fail('Invalid request details');
-    
+
     // Validate client coordinates
     if ($clientLat === false || $clientLng === false || $clientLat === null || $clientLng === null) {
         $clientLat = null;
@@ -160,7 +180,7 @@ if ($method === 'POST' && $path === 'requests') {
         $clientLat = null;
         $clientLng = null;
     }
-    
+
     // Create as pending with no mechanic assigned.
     // All nearby online mechanics can see and compete for it.
     // Once one mechanic accepts, others can't see/accept it anymore.
@@ -168,7 +188,7 @@ if ($method === 'POST' && $path === 'requests') {
     $id = uuid();
     db()->prepare('INSERT INTO service_requests (id, client_id, mechanic_id, category, description, car_model, car_year, vehicle_size, client_lat, client_lng, status) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, "pending")')
         ->execute([$id, $user['id'], $category, $description ?: null, $carModel, $carYear, $vehicleSize, $clientLat, $clientLng]);
-        
+
     // Notify all approved online mechanics within 10km about the new pending request
     if ($clientLat !== null && $clientLng !== null) {
         $mechanics = db()->query(
@@ -215,7 +235,7 @@ if ($method === 'GET' && $path === 'requests') {
         $isOnline = $currentMechanic && $currentMechanic['is_online'] ? 1 : 0;
         $mechanicLat = $currentMechanic ? (float)($currentMechanic['lat'] ?? 0) : 0;
         $mechanicLng = $currentMechanic ? (float)($currentMechanic['lng'] ?? 0) : 0;
-        
+
         // Get mechanic location from mechanic_locations table if available (more accurate)
         $locStmt = db()->prepare('SELECT latitude, longitude FROM mechanic_locations WHERE mechanic_id = (SELECT id FROM mechanic_profiles WHERE user_id = ?)');
         $locStmt->execute([$user['id']]);
@@ -224,7 +244,7 @@ if ($method === 'GET' && $path === 'requests') {
             $mechanicLat = (float)$loc['latitude'];
             $mechanicLng = (float)$loc['longitude'];
         }
-        
+
         // Rules:
         // - Assigned requests: show all (mechanic_id = this user)
         // - Pending requests: show ONLY if mechanic_id IS NULL and created < 30s ago
@@ -233,7 +253,7 @@ if ($method === 'GET' && $path === 'requests') {
         $rows = db()->prepare('SELECT r.*, u.full_name AS client_name, u.phone AS client_phone FROM service_requests r JOIN users u ON u.id = r.client_id WHERE (r.mechanic_id = ? OR (r.status = "pending" AND ? = 1 AND r.mechanic_id IS NULL AND r.created_at >= DATE_SUB(NOW(), INTERVAL 30 SECOND))) ORDER BY r.created_at DESC');
         $rows->execute([$user['id'], $isOnline]);
         $requests = $rows->fetchAll();
-        
+
         // Enrich with distance from mechanic to client location
         if ($mechanicLat !== 0.0 || $mechanicLng !== 0.0) {
             foreach ($requests as &$req) {
@@ -262,36 +282,53 @@ if ($method === 'GET' && $path === 'notifications') {
 }
 
 if (preg_match('#^notifications/([0-9a-f-]{36})/read$#i', $path, $matches) && $method === 'POST') {
-    $user = current_user(); db()->prepare('UPDATE notifications SET status = "read" WHERE id = ? AND user_id = ?')->execute([$matches[1], $user['id']]);
+    $user = current_user();
+    db()->prepare('UPDATE notifications SET status = "read" WHERE id = ? AND user_id = ?')->execute([$matches[1], $user['id']]);
     respond(['data' => []]);
 }
 
 if ($method === 'GET' && $path === 'messages') {
-    $user = current_user(); $requestId = (string)($_GET['request_id'] ?? '');
+    $user = current_user();
+    $requestId = (string)($_GET['request_id'] ?? '');
     if (!preg_match('/^[0-9a-f-]{36}$/i', $requestId)) fail('A valid request id is required');
-    $access = db()->prepare('SELECT 1 FROM service_requests WHERE id = ? AND (client_id = ? OR mechanic_id = ?)'); $access->execute([$requestId, $user['id'], $user['id']]); if (!$access->fetchColumn()) fail('Not authorized', 403);
-    $stmt = db()->prepare('SELECT * FROM messages WHERE request_id = ? ORDER BY created_at ASC'); $stmt->execute([$requestId]); $messages = $stmt->fetchAll();
+    $access = db()->prepare('SELECT 1 FROM service_requests WHERE id = ? AND (client_id = ? OR mechanic_id = ?)');
+    $access->execute([$requestId, $user['id'], $user['id']]);
+    if (!$access->fetchColumn()) fail('Not authorized', 403);
+    $stmt = db()->prepare('SELECT * FROM messages WHERE request_id = ? ORDER BY created_at ASC');
+    $stmt->execute([$requestId]);
+    $messages = $stmt->fetchAll();
     db()->prepare('UPDATE messages SET status = "read" WHERE request_id = ? AND receiver_id = ? AND status = "unread"')->execute([$requestId, $user['id']]);
     respond(['data' => $messages]);
 }
 
 if ($method === 'GET' && $path === 'conversations') {
     $user = current_user();
-    $stmt = db()->prepare('SELECT m.*, sender.full_name AS sender_name, receiver.full_name AS receiver_name FROM messages m JOIN users sender ON sender.id = m.sender_id JOIN users receiver ON receiver.id = m.receiver_id WHERE m.sender_id = ? OR m.receiver_id = ? ORDER BY m.created_at DESC'); $stmt->execute([$user['id'], $user['id']]);
+    $stmt = db()->prepare('SELECT m.*, sender.full_name AS sender_name, receiver.full_name AS receiver_name FROM messages m JOIN users sender ON sender.id = m.sender_id JOIN users receiver ON receiver.id = m.receiver_id WHERE m.sender_id = ? OR m.receiver_id = ? ORDER BY m.created_at DESC');
+    $stmt->execute([$user['id'], $user['id']]);
     respond(['data' => $stmt->fetchAll()]);
 }
 
 if ($method === 'POST' && $path === 'messages') {
-    $user = current_user(); $data = json_input(); $requestId = (string)($data['request_id'] ?? ''); $receiverId = (string)($data['receiver_id'] ?? ''); $message = valid_string($data['message'] ?? '', 1, 500, 'message');
-    $stmt = db()->prepare('SELECT client_id, mechanic_id FROM service_requests WHERE id = ?'); $stmt->execute([$requestId]); $request = $stmt->fetch();
+    $user = current_user();
+    $data = json_input();
+    $requestId = (string)($data['request_id'] ?? '');
+    $receiverId = (string)($data['receiver_id'] ?? '');
+    $message = valid_string($data['message'] ?? '', 1, 500, 'message');
+    $stmt = db()->prepare('SELECT client_id, mechanic_id FROM service_requests WHERE id = ?');
+    $stmt->execute([$requestId]);
+    $request = $stmt->fetch();
     if (!$request || !in_array($user['id'], [$request['client_id'], $request['mechanic_id']], true) || !in_array($receiverId, [$request['client_id'], $request['mechanic_id']], true) || $receiverId === $user['id']) fail('Messaging is only available to assigned request participants', 403);
-    $id = uuid(); db()->prepare('INSERT INTO messages (id, request_id, sender_id, receiver_id, message) VALUES (?, ?, ?, ?, ?)')->execute([$id, $requestId, $user['id'], $receiverId, $message]);
+    $id = uuid();
+    db()->prepare('INSERT INTO messages (id, request_id, sender_id, receiver_id, message) VALUES (?, ?, ?, ?, ?)')->execute([$id, $requestId, $user['id'], $receiverId, $message]);
     create_notification($receiverId, 'message', 'You have a new message about a service request.');
-    $stmt = db()->prepare('SELECT * FROM messages WHERE id = ?'); $stmt->execute([$id]); respond(['data' => $stmt->fetch()], 201);
+    $stmt = db()->prepare('SELECT * FROM messages WHERE id = ?');
+    $stmt->execute([$id]);
+    respond(['data' => $stmt->fetch()], 201);
 }
 
 if (preg_match('#^requests/([0-9a-f-]{36})$#i', $path, $matches) && $method === 'GET') {
-    $user = current_user(); $request = request_by_id($matches[1]);
+    $user = current_user();
+    $request = request_by_id($matches[1]);
     if ($user['role'] !== 'admin' && $request['client_id'] !== $user['id'] && $request['mechanic_id'] !== $user['id']) fail('Not authorized', 403);
     respond(['data' => $request]);
 }
@@ -317,31 +354,39 @@ if (preg_match('#^mechanics/([0-9a-f-]{36})/location$#i', $path, $matches) && $m
 // POST /requests/:id/accept — Mechanic accepts a pending request (first-come-first-serve)
 if (preg_match('#^requests/([0-9a-f-]{36})/accept$#i', $path, $matches) && $method === 'POST') {
     $mechanic = require_role('mechanic');
-    $profile = db()->prepare('SELECT approval_status, is_blocked, is_online FROM mechanic_profiles WHERE user_id = ?'); $profile->execute([$mechanic['id']]); $profile = $profile->fetch();
+    $profile = db()->prepare('SELECT approval_status, is_blocked, is_online FROM mechanic_profiles WHERE user_id = ?');
+    $profile->execute([$mechanic['id']]);
+    $profile = $profile->fetch();
     if (!$profile || $profile['approval_status'] !== 'approved' || (int)$profile['is_blocked']) fail('Your mechanic account is not approved', 403);
     if (!(int)$profile['is_online']) fail('You must be online to accept new requests', 403);
     db()->beginTransaction();
     try {
-        $active = db()->prepare('SELECT 1 FROM service_requests WHERE mechanic_id = ? AND status IN ("accepted", "on_the_way", "arrived", "diagnosis", "repair") FOR UPDATE'); $active->execute([$mechanic['id']]);
+        $active = db()->prepare('SELECT 1 FROM service_requests WHERE mechanic_id = ? AND status IN ("accepted", "on_the_way", "arrived", "diagnosis", "repair") FOR UPDATE');
+        $active->execute([$mechanic['id']]);
         if ($active->fetchColumn()) fail('Complete your active job before accepting another', 409);
-        
+
         // Atomic UPDATE: only works if mechanic_id is still NULL (not yet accepted by anyone)
         $update = db()->prepare('UPDATE service_requests SET mechanic_id = ?, status = "accepted" WHERE id = ? AND status = "pending" AND mechanic_id IS NULL');
         $update->execute([$mechanic['id'], $matches[1]]);
         if ($update->rowCount() !== 1) fail('This request is no longer available (another mechanic may have accepted it)', 409);
         db()->commit();
-    } catch (Throwable $e) { if (db()->inTransaction()) db()->rollBack(); throw $e; }
+    } catch (Throwable $e) {
+        if (db()->inTransaction()) db()->rollBack();
+        throw $e;
+    }
     create_notification(request_by_id($matches[1])['client_id'], 'service_request', 'Your mechanic accepted the service request.');
     respond(['data' => request_by_id($matches[1])]);
 }
 
 if (preg_match('#^requests/([0-9a-f-]{36})/status$#i', $path, $matches) && $method === 'POST') {
-    $mechanic = require_role('mechanic'); $data = json_input(); $next = $data['status'] ?? '';
+    $mechanic = require_role('mechanic');
+    $data = json_input();
+    $next = $data['status'] ?? '';
     // Check the status exists and belongs to this mechanic
     $stmt = db()->prepare('SELECT 1 FROM service_requests WHERE id = ? AND mechanic_id = ?');
     $stmt->execute([$matches[1], $mechanic['id']]);
     if (!$stmt->fetchColumn()) fail('Request not found or not assigned to you', 404);
-    
+
     // Allow any forward status transition
     db()->prepare('UPDATE service_requests SET status = ? WHERE id = ? AND mechanic_id = ?')->execute([$next, $matches[1], $mechanic['id']]);
     create_notification(request_by_id($matches[1])['client_id'], 'service_request', 'Your mechanic updated your service request to ' . str_replace('_', ' ', $next) . '.');
@@ -349,9 +394,14 @@ if (preg_match('#^requests/([0-9a-f-]{36})/status$#i', $path, $matches) && $meth
 }
 
 if (preg_match('#^requests/([0-9a-f-]{36})/rating$#i', $path, $matches) && $method === 'POST') {
-    $client = require_role('client'); $data = json_input(); $rating = filter_var($data['rating'] ?? null, FILTER_VALIDATE_INT); $comment = trim((string)($data['comment'] ?? ''));
+    $client = require_role('client');
+    $data = json_input();
+    $rating = filter_var($data['rating'] ?? null, FILTER_VALIDATE_INT);
+    $comment = trim((string)($data['comment'] ?? ''));
     if ($rating === false || $rating < 1 || $rating > 5 || mb_strlen($comment) > 500) fail('Invalid rating');
-    $stmt = db()->prepare('SELECT mechanic_id FROM service_requests WHERE id = ? AND client_id = ? AND status = "completed"'); $stmt->execute([$matches[1], $client['id']]); $mechanicId = $stmt->fetchColumn();
+    $stmt = db()->prepare('SELECT mechanic_id FROM service_requests WHERE id = ? AND client_id = ? AND status = "completed"');
+    $stmt->execute([$matches[1], $client['id']]);
+    $mechanicId = $stmt->fetchColumn();
     if (!$mechanicId) fail('Only completed requests can be rated', 422);
     db()->prepare('INSERT INTO mechanic_ratings (id, request_id, client_id, mechanic_id, rating, comment) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE rating = VALUES(rating), comment = VALUES(comment), updated_at = CURRENT_TIMESTAMP')->execute([uuid(), $matches[1], $client['id'], $mechanicId, $rating, $comment ?: null]);
     db()->prepare('UPDATE mechanic_profiles SET rating = (SELECT COALESCE(ROUND(AVG(r.rating), 1), 0) FROM mechanic_ratings r WHERE r.mechanic_id = ?), total_reviews = (SELECT COUNT(*) FROM mechanic_ratings r WHERE r.mechanic_id = ?) WHERE user_id = ?')->execute([$mechanicId, $mechanicId, $mechanicId]);
@@ -381,7 +431,8 @@ if (preg_match('#^admin/mechanics/([0-9a-f-]{36})/approval$#i', $path, $matches)
     $stmt = db()->prepare('UPDATE mechanic_profiles SET approval_status = ? WHERE id = ?');
     $stmt->execute([$status, $matches[1]]);
     if ($stmt->rowCount() !== 1) fail('Mechanic profile not found', 404);
-    $profile = db()->prepare('SELECT user_id FROM mechanic_profiles WHERE id = ?'); $profile->execute([$matches[1]]);
+    $profile = db()->prepare('SELECT user_id FROM mechanic_profiles WHERE id = ?');
+    $profile->execute([$matches[1]]);
     create_notification((string)$profile->fetchColumn(), 'account', 'Your mechanic registration was ' . $status . '.');
     respond(['data' => ['approval_status' => $status]]);
 }

@@ -36,6 +36,17 @@ npm i
 npm run dev
 ```
 
+## Deploy the frontend to Vercel
+
+This repository contains a Vite React frontend and a separate PHP/MySQL API. Vercel can host the frontend, but the PHP API must run on a PHP-capable host with a reachable MySQL database.
+
+1. Import the repository into Vercel. The included `vercel.json` configures the Vite build and client-side routing.
+2. Set the Vercel environment variable `VITE_API_BASE_URL` to the public URL of the deployed API, for example `https://api.example.com/api`.
+3. Deploy the API separately and configure its database environment variables (`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`) plus `CORS_ORIGINS=https://your-app.vercel.app`.
+4. Run the SQL in `mysql/schema.sql` on the production MySQL database before using the app.
+
+For a custom frontend domain, set `CORS_ORIGINS` to that origin instead. Multiple origins can be supplied as a comma-separated list.
+
 **Edit a file directly in GitHub**
 
 - Navigate to the desired file(s).
