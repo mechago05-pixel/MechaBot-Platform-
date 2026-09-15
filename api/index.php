@@ -35,29 +35,95 @@ if ($method === 'POST' && $path === 'auth/register') {
     $phone = valid_string($data['phone'] ?? '', 7, 20, 'phone number');
     $role = in_array($data['role'] ?? 'client', ['client', 'mechanic'], true) ? $data['role'] : 'client';
     if (!$email || strlen($password) < 6) fail('Provide a valid email and a password of at least 6 characters');
+    
     try {
         $id = uuid();
-        db()->prepare('INSERT INTO users (id, email, password_hash, full_name, phone, role) VALUES (?, ?, ?, ?, ?, ?)')
+        db()->prepare('INSERT INTO users (id, email, password_hash, full_name, phone, role, email_verified) VALUES (?, ?, ?, ?, ?, ?, 0)')
             ->execute([$id, $email, password_hash($password, PASSWORD_DEFAULT), $fullName, $phone, $role]);
         db()->prepare('INSERT INTO profiles (id, user_id, full_name, phone) VALUES (?, ?, ?, ?)')->execute([uuid(), $id, $fullName, $phone]);
         db()->prepare('INSERT INTO user_roles (id, user_id, role) VALUES (?, ?, ?)')->execute([uuid(), $id, $role]);
+        
+        // Generate and send verification email
+        $verificationCode = strtoupper(bin2hex(random_bytes(4))); // 8-character code
+        db()->prepare(
+            'INSERT INTO email_verifications (id, email, code, expires_at) 
+            VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 24 HOUR))'
+        )->execute([uuid(), $email, $verificationCode]);
+        
+        // Send verification email
+        send_verification_email($email, $fullName, $verificationCode);
+        
     } catch (PDOException $e) {
         if ($e->getCode() === '23000') fail('An account with this email already exists', 409);
         throw $e;
     }
-    respond(['data' => ['message' => 'Account created']], 201);
+    respond(['data' => ['message' => 'Account created. Check your email to verify.']], 201);
+}
+
+if ($method === 'POST' && $path === 'auth/verify-email') {
+    $data = json_input();
+    $email = filter_var(strtolower(trim((string)($data['email'] ?? ''))), FILTER_VALIDATE_EMAIL);
+    $code = trim((string)($data['code'] ?? ''));
+    
+    if (!$email || !$code) fail('Email and verification code required');
+    
+    $stmt = db()->prepare(
+        'SELECT 1 FROM email_verifications 
+        WHERE email = ? AND code = ? AND expires_at > NOW()'
+    );
+    $stmt->execute([$email, $code]);
+    
+    if (!$stmt->fetchColumn()) {
+        fail('Invalid or expired verification code', 400);
+    }
+    
+    // Mark user as verified
+    db()->prepare('UPDATE users SET email_verified = 1 WHERE email = ?')
+        ->execute([$email]);
+    
+    // Delete verification record
+    db()->prepare('DELETE FROM email_verifications WHERE email = ?')
+        ->execute([$email]);
+    
+    respond(['data' => ['message' => 'Email verified successfully']]);
+}
+
+if ($method === 'POST' && $path === 'auth/resend-verification') {
+    $data = json_input();
+    $email = filter_var(strtolower(trim((string)($data['email'] ?? ''))), FILTER_VALIDATE_EMAIL);
+    
+    if (!$email) fail('Email is required');
+    
+    $stmt = db()->prepare('SELECT full_name FROM users WHERE email = ? AND email_verified = 0');
+    $stmt->execute([$email]);
+    $user = $stmt->fetch();
+    
+    if (!$user) fail('User not found or already verified', 404);
+    
+    $verificationCode = strtoupper(bin2hex(random_bytes(4)));
+    db()->prepare(
+        'INSERT INTO email_verifications (id, email, code, expires_at) 
+        VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 24 HOUR))
+        ON DUPLICATE KEY UPDATE code = VALUES(code), expires_at = VALUES(expires_at)'
+    )->execute([uuid(), $email, $verificationCode]);
+    
+    send_verification_email($email, $user['full_name'], $verificationCode);
+    
+    respond(['data' => ['message' => 'Verification email sent']]);
 }
 
 if ($method === 'POST' && $path === 'auth/login') {
     $data = json_input();
-    $stmt = db()->prepare('SELECT id, email, password_hash, full_name, phone, role, is_blocked FROM users WHERE email = ?');
+    $stmt = db()->prepare('SELECT id, email, password_hash, full_name, phone, role, is_blocked, email_verified FROM users WHERE email = ?');
     $stmt->execute([strtolower(trim((string)($data['email'] ?? '')))]);
     $user = $stmt->fetch();
     if (!$user || !password_verify((string)($data['password'] ?? ''), $user['password_hash'])) fail('Invalid email or password', 401);
     if ((int)$user['is_blocked'] === 1) fail('This account has been blocked', 403);
+    if ((int)$user['email_verified'] === 0) fail('Please verify your email before signing in', 403);
+    
     session_regenerate_id(true);
     $_SESSION['user_id'] = $user['id'];
-    unset($user['password_hash'], $user['is_blocked']);
+    unset($user['password_hash'], $user['is_blocked'], $user['email_verified']);
     respond(['data' => ['user' => $user]]);
 }
 
@@ -84,7 +150,7 @@ if ($method === 'GET' && $path === 'mechanics/me') {
 
 if ($method === 'GET' && $path === 'mechanics') {
     $specialty = trim((string)($_GET['specialty'] ?? ''));
-    $sql = 'SELECT m.id, m.user_id, m.full_name, m.phone, m.specialties, m.garage_location, m.profile_image_url, m.rating, m.total_reviews, m.experience_years, m.tier, m.is_online, m.availability_status, m.lat, m.lng, l.latitude, l.longitude FROM mechanic_profiles m LEFT JOIN mechanic_locations l ON l.mechanic_id = m.id WHERE m.approval_status = "approved" AND m.is_blocked = 0';
+    $sql = 'SELECT m.id, m.user_id, m.full_name, m.phone, m.specialties, m.garage_location, m.profile_image_url, m.rating, m.total_reviews, m.experience_years, m.tier, m.is_online, m.availability_status FROM mechanic_profiles m WHERE m.approval_status = "approved" AND m.is_blocked = 0';
     $params = [];
     if ($specialty !== '') {
         $sql .= ' AND JSON_CONTAINS(m.specialties, JSON_QUOTE(?))';
@@ -146,7 +212,7 @@ if ($method === 'POST' && $path === 'mechanics/register') {
     $years = filter_var($data['experience_years'] ?? null, FILTER_VALIDATE_INT);
     $specialties = $data['specialties'] ?? null;
     if (!$email || $years === false || $years < 0 || $years > 80 || !is_array($specialties) || count($specialties) === 0) fail('Please provide valid mechanic registration details');
-    $stmt = db()->prepare('INSERT INTO mechanic_profiles (id, user_id, full_name, nida_number, email, phone, experience_years, specialties, garage_location, lat, lng, profile_image_url, approval_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "pending") ON DUPLICATE KEY UPDATE full_name=VALUES(full_name), nida_number=VALUES(nida_number), email=VALUES(email), phone=VALUES(phone), experience_years=VALUES(experience_years), specialties=VALUES(specialties), garage_location=VALUES(garage_location), lat=VALUES(lat), lng=VALUES(lng), profile_image_url=COALESCE(VALUES(profile_image_url), profile_image_url), approval_status=IF(approval_status="rejected", "pending", approval_status), updated_at=CURRENT_TIMESTAMP');
+    $stmt = db()->prepare('INSERT INTO mechanic_profiles (id, user_id, full_name, nida_number, email, phone, experience_years, specialties, garage_location, lat, lng, profile_image_url, approval_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "pending")');
     $stmt->execute([uuid(), $user['id'], $fullName, $nida, $email, $phone, $years, json_encode(array_values($specialties)), $garage, (float)($data['lat'] ?? 0), (float)($data['lng'] ?? 0), $data['profile_image_url'] ?? null]);
     db()->prepare('UPDATE users SET full_name = ?, phone = ?, role = "mechanic" WHERE id = ?')->execute([$fullName, $phone, $user['id']]);
     db()->prepare('UPDATE profiles SET full_name = ?, phone = ?, avatar_url = COALESCE(?, avatar_url) WHERE user_id = ?')->execute([$fullName, $phone, $data['profile_image_url'] ?? null, $user['id']]);
@@ -250,8 +316,8 @@ if ($method === 'GET' && $path === 'requests') {
         // - Pending requests: show ONLY if mechanic_id IS NULL and created < 30s ago
         //   (older pending requests are auto-deleted by expire_stale_requests())
         // - Once accepted by any mechanic: mechaninc_id is set, so it no longer shows as pending for others
-        $rows = db()->prepare('SELECT r.*, u.full_name AS client_name, u.phone AS client_phone FROM service_requests r JOIN users u ON u.id = r.client_id WHERE (r.mechanic_id = ? OR (r.status = "pending" AND ? = 1 AND r.mechanic_id IS NULL AND r.created_at >= DATE_SUB(NOW(), INTERVAL 30 SECOND))) ORDER BY r.created_at DESC');
-        $rows->execute([$user['id'], $isOnline]);
+        $rows = db()->prepare('SELECT r.*, u.full_name AS client_name, u.phone AS client_phone FROM service_requests r JOIN users u ON u.id = r.client_id WHERE (r.mechanic_id = ? OR (r.status = "pending" AND r.created_at > DATE_SUB(NOW(), INTERVAL 30 SECOND))) AND r.status IN ("pending", "accepted", "on_the_way", "arrived", "diagnosis", "repair", "completed") AND (r.mechanic_id = ? OR r.status = "pending" AND r.mechanic_id IS NULL OR ? = 1) ORDER BY r.created_at DESC');
+        $rows->execute([$user['id'], $user['id'], $isOnline]);
         $requests = $rows->fetchAll();
 
         // Enrich with distance from mechanic to client location
@@ -303,7 +369,7 @@ if ($method === 'GET' && $path === 'messages') {
 
 if ($method === 'GET' && $path === 'conversations') {
     $user = current_user();
-    $stmt = db()->prepare('SELECT m.*, sender.full_name AS sender_name, receiver.full_name AS receiver_name FROM messages m JOIN users sender ON sender.id = m.sender_id JOIN users receiver ON receiver.id = m.receiver_id WHERE m.sender_id = ? OR m.receiver_id = ? ORDER BY m.created_at DESC');
+    $stmt = db()->prepare('SELECT m.*, sender.full_name AS sender_name, receiver.full_name AS receiver_name FROM messages m JOIN users sender ON sender.id = m.sender_id JOIN users receiver ON receiver.id = m.receiver_id WHERE m.sender_id = ? OR m.receiver_id = ? GROUP BY m.request_id ORDER BY m.created_at DESC');
     $stmt->execute([$user['id'], $user['id']]);
     respond(['data' => $stmt->fetchAll()]);
 }
@@ -317,7 +383,7 @@ if ($method === 'POST' && $path === 'messages') {
     $stmt = db()->prepare('SELECT client_id, mechanic_id FROM service_requests WHERE id = ?');
     $stmt->execute([$requestId]);
     $request = $stmt->fetch();
-    if (!$request || !in_array($user['id'], [$request['client_id'], $request['mechanic_id']], true) || !in_array($receiverId, [$request['client_id'], $request['mechanic_id']], true) || $receiverId === $user['id']) fail('Messaging is only available to assigned request participants', 403);
+    if (!$request || !in_array($user['id'], [$request['client_id'], $request['mechanic_id']], true) || !in_array($receiverId, [$request['client_id'], $request['mechanic_id']], true) || $receiverId === $user['id']) fail('Invalid message request');
     $id = uuid();
     db()->prepare('INSERT INTO messages (id, request_id, sender_id, receiver_id, message) VALUES (?, ?, ?, ?, ?)')->execute([$id, $requestId, $user['id'], $receiverId, $message]);
     create_notification($receiverId, 'message', 'You have a new message about a service request.');
@@ -403,8 +469,10 @@ if (preg_match('#^requests/([0-9a-f-]{36})/rating$#i', $path, $matches) && $meth
     $stmt->execute([$matches[1], $client['id']]);
     $mechanicId = $stmt->fetchColumn();
     if (!$mechanicId) fail('Only completed requests can be rated', 422);
-    db()->prepare('INSERT INTO mechanic_ratings (id, request_id, client_id, mechanic_id, rating, comment) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE rating = VALUES(rating), comment = VALUES(comment), updated_at = CURRENT_TIMESTAMP')->execute([uuid(), $matches[1], $client['id'], $mechanicId, $rating, $comment ?: null]);
-    db()->prepare('UPDATE mechanic_profiles SET rating = (SELECT COALESCE(ROUND(AVG(r.rating), 1), 0) FROM mechanic_ratings r WHERE r.mechanic_id = ?), total_reviews = (SELECT COUNT(*) FROM mechanic_ratings r WHERE r.mechanic_id = ?) WHERE user_id = ?')->execute([$mechanicId, $mechanicId, $mechanicId]);
+    db()->prepare('INSERT INTO mechanic_ratings (id, request_id, client_id, mechanic_id, rating, comment) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE rating = VALUES(rating), comment = VALUES(comment)')
+        ->execute([uuid(), $matches[1], $client['id'], $mechanicId, $rating, $comment]);
+    db()->prepare('UPDATE mechanic_profiles SET rating = (SELECT COALESCE(ROUND(AVG(r.rating), 1), 0) FROM mechanic_ratings r WHERE r.mechanic_id = ?), total_reviews = (SELECT COUNT(*) FROM mechanic_ratings r WHERE r.mechanic_id = ?) WHERE id = (SELECT id FROM mechanic_profiles WHERE user_id = ?)')
+        ->execute([$mechanicId, $mechanicId, $mechanicId]);
     create_notification((string)$mechanicId, 'rating', 'A client left a ' . $rating . '-star rating.');
     respond(['data' => ['rating' => $rating]]);
 }
@@ -431,9 +499,15 @@ if (preg_match('#^admin/mechanics/([0-9a-f-]{36})/approval$#i', $path, $matches)
     $stmt = db()->prepare('UPDATE mechanic_profiles SET approval_status = ? WHERE id = ?');
     $stmt->execute([$status, $matches[1]]);
     if ($stmt->rowCount() !== 1) fail('Mechanic profile not found', 404);
-    $profile = db()->prepare('SELECT user_id FROM mechanic_profiles WHERE id = ?');
+    $profile = db()->prepare('SELECT m.user_id, m.email, m.full_name FROM mechanic_profiles m WHERE m.id = ?');
     $profile->execute([$matches[1]]);
-    create_notification((string)$profile->fetchColumn(), 'account', 'Your mechanic registration was ' . $status . '.');
+    $mechanic = $profile->fetch();
+    
+    if ($mechanic) {
+        create_notification((string)$mechanic['user_id'], 'account', 'Your mechanic registration was ' . $status . '.');
+        send_mechanic_approval_email($mechanic['email'], $mechanic['full_name'], $status === 'approved');
+    }
+    
     respond(['data' => ['approval_status' => $status]]);
 }
 
