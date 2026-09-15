@@ -57,7 +57,7 @@ function fail(string $message, int $status = 400): never
 function current_user(): array
 {
     if (empty($_SESSION['user_id'])) fail('Authentication required', 401);
-    $stmt = db()->prepare('SELECT id, email, full_name, phone, role FROM users WHERE id = ?');
+    $stmt = db()->prepare('SELECT id, email, full_name, phone, role, email_verified FROM users WHERE id = ?');
     $stmt->execute([$_SESSION['user_id']]);
     $user = $stmt->fetch();
     if (!$user) {
@@ -91,7 +91,7 @@ function valid_string(mixed $value, int $min, int $max, string $field): string
 
 function request_by_id(string $id): array
 {
-    $stmt = db()->prepare('SELECT r.*, c.full_name AS client_name, c.phone AS client_phone, m.full_name AS mechanic_name, m.phone AS mechanic_phone FROM service_requests r JOIN users c ON c.id = r.client_id LEFT JOIN mechanic_profiles m ON m.user_id = r.mechanic_id WHERE r.id = ?');
+    $stmt = db()->prepare('SELECT r.*, c.full_name AS client_name, c.phone AS client_phone, m.full_name AS mechanic_name, m.phone AS mechanic_phone FROM service_requests r JOIN users c ON c.id = r.client_id LEFT JOIN users m ON m.id = r.mechanic_id WHERE r.id = ?');
     $stmt->execute([$id]);
     $request = $stmt->fetch();
     if (!$request) fail('Service request not found', 404);
@@ -118,6 +118,229 @@ function create_notification(string $userId, string $type, string $message): voi
 {
     db()->prepare('INSERT INTO notifications (id, user_id, type, message) VALUES (?, ?, ?, ?)')
         ->execute([uuid(), $userId, $type, $message]);
+}
+
+/**
+ * Get Mailer instance
+ */
+function mailer(): \PHPMailer\PHPMailer\PHPMailer
+{
+    static $mailer = null;
+    if ($mailer === null) {
+        // Load composer autoloader if available
+        $autoloadPath = __DIR__ . '/../vendor/autoload.php';
+        if (file_exists($autoloadPath)) {
+            require_once $autoloadPath;
+        }
+        
+        $mailer = new \PHPMailer\PHPMailer\PHPMailer(true);
+        
+        try {
+            $mailer->isSMTP();
+            $mailer->Host = env_value('MAIL_HOST', 'smtp.gmail.com');
+            $mailer->Port = (int) env_value('MAIL_PORT', '587');
+            $mailer->SMTPAuth = true;
+            $mailer->SMTPSecure = \PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
+            $mailer->Username = env_value('MAIL_USERNAME', '');
+            $mailer->Password = env_value('MAIL_PASSWORD', '');
+            $mailer->CharSet = 'UTF-8';
+            $mailer->setFrom(
+                env_value('MAIL_FROM_ADDRESS', 'noreply@mechabot.local'),
+                env_value('MAIL_FROM_NAME', 'MechaBot Platform')
+            );
+        } catch (\PHPMailer\PHPMailer\Exception $e) {
+            error_log("Mailer configuration error: " . $e->getMessage());
+        }
+    }
+    return $mailer;
+}
+
+/**
+ * Send email with verification code
+ */
+function send_verification_email(string $email, string $fullName, string $verificationCode): bool
+{
+    try {
+        $mail = mailer();
+        $mail->clearAddresses();
+        $mail->addAddress($email, $fullName);
+        $mail->isHTML(true);
+        $mail->Subject = 'Verify Your Email - MechaBot Platform';
+        
+        $appUrl = env_value('APP_URL', 'http://localhost:5173');
+        $verificationLink = $appUrl . '/verify-email?code=' . urlencode($verificationCode) . '&email=' . urlencode($email);
+        
+        $mail->Body = <<<HTML
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+        .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px; }
+        .button { display: inline-block; background: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; margin: 20px 0; }
+        .code { background: white; border: 2px solid #e0e0e0; padding: 15px; text-align: center; font-size: 18px; font-weight: bold; letter-spacing: 2px; border-radius: 5px; margin: 20px 0; }
+        .footer { text-align: center; font-size: 12px; color: #999; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 MechaBot Platform</h1>
+            <p>Email Verification</p>
+        </div>
+        <div class="content">
+            <h2>Hello {$fullName},</h2>
+            <p>Thank you for signing up with MechaBot Platform! To complete your registration, please verify your email address:</p>
+            
+            <a href="{$verificationLink}" class="button">Verify Email Address</a>
+            
+            <p>Or enter this code:</p>
+            <div class="code">{$verificationCode}</div>
+            
+            <p>This link expires in 24 hours.</p>
+            <p>If you didn't create this account, please ignore this email.</p>
+        </div>
+        <div class="footer">
+            <p>&copy; 2026 MechaBot Platform. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>
+HTML;
+        
+        $mail->AltBody = "Welcome to MechaBot! Your verification code is: {$verificationCode}";
+        return $mail->send();
+    } catch (\Exception $e) {
+        error_log("Email send error: " . $e->getMessage());
+        return false;
+    }
+}
+
+/**
+ * Send password reset email
+ */
+function send_password_reset_email(string $email, string $fullName, string $resetCode): bool
+{
+    try {
+        $mail = mailer();
+        $mail->clearAddresses();
+        $mail->addAddress($email, $fullName);
+        $mail->isHTML(true);
+        $mail->Subject = 'Reset Your Password - MechaBot Platform';
+        
+        $appUrl = env_value('APP_URL', 'http://localhost:5173');
+        $resetLink = $appUrl . '/reset-password?code=' . urlencode($resetCode) . '&email=' . urlencode($email);
+        
+        $mail->Body = <<<HTML
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+        .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px; }
+        .button { display: inline-block; background: #f5576c; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; margin: 20px 0; }
+        .code { background: white; border: 2px solid #e0e0e0; padding: 15px; text-align: center; font-size: 18px; font-weight: bold; letter-spacing: 2px; border-radius: 5px; margin: 20px 0; }
+        .footer { text-align: center; font-size: 12px; color: #999; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 MechaBot Platform</h1>
+            <p>Password Reset</p>
+        </div>
+        <div class="content">
+            <h2>Hello {$fullName},</h2>
+            <p>We received a request to reset your password. Click the button below:</p>
+            
+            <a href="{$resetLink}" class="button">Reset Password</a>
+            
+            <p>Or use this code:</p>
+            <div class="code">{$resetCode}</div>
+            
+            <p>This link expires in 1 hour. If you didn't request this, ignore this email.</p>
+        </div>
+        <div class="footer">
+            <p>&copy; 2026 MechaBot Platform. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>
+HTML;
+        
+        $mail->AltBody = "Password reset code: {$resetCode}";
+        return $mail->send();
+    } catch (\Exception $e) {
+        error_log("Email send error: " . $e->getMessage());
+        return false;
+    }
+}
+
+/**
+ * Send mechanic approval email
+ */
+function send_mechanic_approval_email(string $email, string $fullName, bool $approved): bool
+{
+    try {
+        $mail = mailer();
+        $mail->clearAddresses();
+        $mail->addAddress($email, $fullName);
+        $mail->isHTML(true);
+        
+        $status = $approved ? 'Approved' : 'Rejected';
+        $color = $approved ? '#28a745' : '#dc3545';
+        $message = $approved
+            ? 'Congratulations! Your mechanic profile has been approved. You can now start accepting service requests.'
+            : 'Unfortunately, your mechanic profile application was not approved. Please review and reapply.';
+        
+        $mail->Subject = "Mechanic Profile {$status} - MechaBot Platform";
+        $mail->Body = <<<HTML
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+        .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px; }
+        .button { display: inline-block; background: {$color}; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; margin: 20px 0; }
+        .footer { text-align: center; font-size: 12px; color: #999; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 MechaBot Platform</h1>
+            <p>Mechanic Profile Update</p>
+        </div>
+        <div class="content">
+            <h2>Hello {$fullName},</h2>
+            <p><strong>Status: {$status}</strong></p>
+            <p>{$message}</p>
+            
+            <a href="http://localhost:5173/dashboard" class="button">Go to Dashboard</a>
+        </div>
+        <div class="footer">
+            <p>&copy; 2026 MechaBot Platform. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>
+HTML;
+        
+        $mail->AltBody = "Your mechanic profile has been {$status}.";
+        return $mail->send();
+    } catch (\Exception $e) {
+        error_log("Email send error: " . $e->getMessage());
+        return false;
+    }
 }
 
 session_name('mechabot_session');
