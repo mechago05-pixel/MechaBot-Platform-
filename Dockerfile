@@ -23,8 +23,8 @@ RUN composer install --no-dev --no-interaction --no-scripts --prefer-dist
 
 FROM php:8.3-apache
 WORKDIR /var/www/html
+# NOTE: pdo_sqlite is already bundled and enabled in the official php:8.3-apache image.
 RUN docker-php-ext-install pdo pdo_mysql \
-    && docker-php-ext-enable pdo_sqlite \
     && a2enmod rewrite \
     && echo "ServerName localhost" >> /etc/apache2/apache2.conf
 
