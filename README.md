@@ -89,6 +89,14 @@ This repo includes a production `Dockerfile` (React frontend + PHP API + built-i
 
 The database schema is created automatically on first start (`api/migrate.php` handles both SQLite and MySQL). If you later upgrade to a paid plan, uncomment the `mechabot-mysql` block in `render.yaml` and set `DB_DRIVER=mysql` to switch back to MySQL.
 
+### Go-live checklist (after the first deploy)
+
+1. **Live URL** — `https://mechabot.onrender.com` serves the app, and `https://mechabot.onrender.com/api/health` should return `{"data":{"ok":true,"db":true}}`.
+2. **Free tier cold start** — the service sleeps after 15 minutes idle; the first request can take 30–60 seconds while it wakes up. This is normal, not downtime.
+3. **Create the admin account** — register with the exact `ADMIN_EMAIL`, then Render Dashboard → Manual Deploy → Restart so `api/migrate.php` promotes it on boot.
+4. **Email verification** — stays off until SMTP env vars are filled; add `MAIL_USERNAME` + `MAIL_PASSWORD` (Gmail app password) and restart to turn it on.
+5. **Data resets on redeploy** — SQLite lives inside the container on the free plan, so users/uploads are wiped on every deploy. Upgrade to a paid plan with a disk (or MySQL) for persistent data.
+
 ### Deploy the frontend to Vercel
 
 ## Can I connect a custom domain to my Lovable project?
