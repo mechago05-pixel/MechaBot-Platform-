@@ -6,6 +6,10 @@ declare(strict_types=1);
 function env_value(string $key, ?string $default = null): ?string
 {
     static $values = null;
+    $fromEnv = getenv($key);
+    if ($fromEnv !== false && $fromEnv !== '') {
+        return $fromEnv;
+    }
     if ($values === null) {
         $values = [];
         $file = __DIR__ . '/.env';
@@ -17,7 +21,15 @@ function env_value(string $key, ?string $default = null): ?string
             }
         }
     }
-    return $values[$key] ?? getenv($key) ?: $default;
+    return $values[$key] ?? $default;
+}
+
+function email_verification_required(): bool
+{
+    $flag = strtolower((string) env_value('VERIFY_EMAIL_ENABLED', ''));
+    if ($flag === 'true' || $flag === '1') return true;
+    if ($flag === 'false' || $flag === '0') return false;
+    return env_value('MAIL_USERNAME', '') !== '';
 }
 
 function db(): PDO
@@ -128,7 +140,7 @@ function mailer(): \PHPMailer\PHPMailer\PHPMailer
     static $mailer = null;
     if ($mailer === null) {
         // Load composer autoloader if available
-        $autoloadPath = __DIR__ . '/../vendor/autoload.php';
+        $autoloadPath = __DIR__ . '/vendor/autoload.php';
         if (file_exists($autoloadPath)) {
             require_once $autoloadPath;
         }
@@ -167,7 +179,7 @@ function send_verification_email(string $email, string $fullName, string $verifi
         $mail->isHTML(true);
         $mail->Subject = 'Verify Your Email - MechaBot Platform';
         
-        $appUrl = env_value('APP_URL', 'http://localhost:5173');
+        $appUrl = env_value('APP_URL', env_value('RENDER_EXTERNAL_URL', 'http://localhost:5173'));
         $verificationLink = $appUrl . '/verify-email?code=' . urlencode($verificationCode) . '&email=' . urlencode($email);
         
         $mail->Body = <<<HTML
@@ -231,7 +243,7 @@ function send_password_reset_email(string $email, string $fullName, string $rese
         $mail->isHTML(true);
         $mail->Subject = 'Reset Your Password - MechaBot Platform';
         
-        $appUrl = env_value('APP_URL', 'http://localhost:5173');
+        $appUrl = env_value('APP_URL', env_value('RENDER_EXTERNAL_URL', 'http://localhost:5173'));
         $resetLink = $appUrl . '/reset-password?code=' . urlencode($resetCode) . '&email=' . urlencode($email);
         
         $mail->Body = <<<HTML
@@ -299,6 +311,7 @@ function send_mechanic_approval_email(string $email, string $fullName, bool $app
             ? 'Congratulations! Your mechanic profile has been approved. You can now start accepting service requests.'
             : 'Unfortunately, your mechanic profile application was not approved. Please review and reapply.';
         
+        $appUrl = env_value('APP_URL', env_value('RENDER_EXTERNAL_URL', 'http://localhost:5173'));
         $mail->Subject = "Mechanic Profile {$status} - MechaBot Platform";
         $mail->Body = <<<HTML
 <!DOCTYPE html>
@@ -325,7 +338,7 @@ function send_mechanic_approval_email(string $email, string $fullName, bool $app
             <p><strong>Status: {$status}</strong></p>
             <p>{$message}</p>
             
-            <a href="http://localhost:5173/dashboard" class="button">Go to Dashboard</a>
+            <a href="{$appUrl}/dashboard" class="button">Go to Dashboard</a>
         </div>
         <div class="footer">
             <p>&copy; 2026 MechaBot Platform. All rights reserved.</p>
@@ -343,7 +356,14 @@ HTML;
     }
 }
 
-session_name('mechabot_session');
-$crossOrigin = env_value('CORS_ORIGINS', '') !== '';
-session_set_cookie_params(['httponly' => true, 'samesite' => $crossOrigin ? 'None' : 'Lax', 'secure' => $crossOrigin || (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')]);
-session_start();
+if (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https') {
+    $_SERVER['HTTPS'] = 'on';
+}
+
+if (PHP_SAPI !== 'cli') {
+    session_name('mechabot_session');
+    $crossOrigin = env_value('CORS_ORIGINS', '') !== '';
+    $secure = $crossOrigin || (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off');
+    session_set_cookie_params(['httponly' => true, 'samesite' => $crossOrigin ? 'None' : 'Lax', 'secure' => $secure]);
+    session_start();
+}

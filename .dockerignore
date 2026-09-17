@@ -1,0 +1,12 @@
+.git
+.gitignore
+node_modules
+dist
+.env
+.env.local
+api/.env
+api/vendor
+*.md
+.lovable
+.vscode
+.idea

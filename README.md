@@ -73,7 +73,30 @@ This project is built with:
 
 ## How can I deploy this project?
 
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
+### Render (recommended for a live site)
+
+This repo includes a production `Dockerfile` (React frontend + PHP API) and `render.yaml`.
+
+1. Push these files to GitHub (`https://github.com/mechago05-pixel/MechaBot-Platform-`).
+2. Open [Render Dashboard](https://dashboard.render.com) → **New** → **Blueprint**.
+3. Connect the GitHub repo and apply `render.yaml`.
+4. When Render asks for values, paste:
+   - `VITE_SUPABASE_URL`
+   - `VITE_SUPABASE_PUBLISHABLE_KEY`
+   - `VITE_SUPABASE_PROJECT_ID`
+   - Optional SMTP fields (`MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_FROM_ADDRESS`)
+5. Wait until **mechabot** and **mechabot-mysql** are live. The public URL is `https://mechabot.onrender.com` (or the URL Render shows).
+6. Email verification is off by default (`VERIFY_EMAIL_ENABLED=false`) so you can register and sign in immediately. Promote an admin in MySQL:
+
+```sql
+UPDATE users SET role = 'admin' WHERE email = 'your@email.com';
+INSERT IGNORE INTO user_roles (id, user_id, role)
+SELECT UUID(), id, 'admin' FROM users WHERE email = 'your@email.com';
+```
+
+MySQL on Render needs a paid **Starter** instance because it uses a persistent disk. The website and API run in one Docker web service and talk to MySQL on Render's private network.
+
+### Deploy the frontend to Vercel
 
 ## Can I connect a custom domain to my Lovable project?
 

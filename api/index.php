@@ -25,6 +25,15 @@ $path = implode('/', array_slice($segments, $apiSegment === false ? 0 : $apiSegm
 $path = preg_replace('#^index\.php/?#i', '', $path) ?? '';
 $method = $_SERVER['REQUEST_METHOD'];
 
+if ($method === 'GET' && $path === 'health') {
+    try {
+        db()->query('SELECT 1');
+        respond(['data' => ['ok' => true, 'db' => true]]);
+    } catch (Throwable $e) {
+        respond(['data' => ['ok' => false, 'db' => false]], 503);
+    }
+}
+
 expire_stale_requests();
 
 if ($method === 'POST' && $path === 'auth/register') {
@@ -38,21 +47,22 @@ if ($method === 'POST' && $path === 'auth/register') {
     
     try {
         $id = uuid();
-        db()->prepare('INSERT INTO users (id, email, password_hash, full_name, phone, role, email_verified) VALUES (?, ?, ?, ?, ?, ?, 0)')
-            ->execute([$id, $email, password_hash($password, PASSWORD_DEFAULT), $fullName, $phone, $role]);
+        $verified = email_verification_required() ? 0 : 1;
+        db()->prepare('INSERT INTO users (id, email, password_hash, full_name, phone, role, email_verified) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            ->execute([$id, $email, password_hash($password, PASSWORD_DEFAULT), $fullName, $phone, $role, $verified]);
         db()->prepare('INSERT INTO profiles (id, user_id, full_name, phone) VALUES (?, ?, ?, ?)')->execute([uuid(), $id, $fullName, $phone]);
         db()->prepare('INSERT INTO user_roles (id, user_id, role) VALUES (?, ?, ?)')->execute([uuid(), $id, $role]);
-        
-        // Generate and send verification email
-        $verificationCode = strtoupper(bin2hex(random_bytes(4))); // 8-character code
+
+        if ($verified === 1) {
+            respond(['data' => ['message' => 'Account created. You can sign in now.']], 201);
+        }
+
+        $verificationCode = strtoupper(bin2hex(random_bytes(4)));
         db()->prepare(
             'INSERT INTO email_verifications (id, email, code, expires_at) 
             VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 24 HOUR))'
         )->execute([uuid(), $email, $verificationCode]);
-        
-        // Send verification email
         send_verification_email($email, $fullName, $verificationCode);
-        
     } catch (PDOException $e) {
         if ($e->getCode() === '23000') fail('An account with this email already exists', 409);
         throw $e;
@@ -119,7 +129,7 @@ if ($method === 'POST' && $path === 'auth/login') {
     $user = $stmt->fetch();
     if (!$user || !password_verify((string)($data['password'] ?? ''), $user['password_hash'])) fail('Invalid email or password', 401);
     if ((int)$user['is_blocked'] === 1) fail('This account has been blocked', 403);
-    if ((int)$user['email_verified'] === 0) fail('Please verify your email before signing in', 403);
+    if (email_verification_required() && (int)$user['email_verified'] === 0) fail('Please verify your email before signing in', 403);
     
     session_regenerate_id(true);
     $_SESSION['user_id'] = $user['id'];
