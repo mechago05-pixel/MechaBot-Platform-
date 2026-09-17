@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 require __DIR__ . '/bootstrap.php';
 
-function wait_for_db(int $attempts = 60): PDO
+function wait_for_db(int $attempts = 5): PDO
 {
     $last = null;
     for ($i = 1; $i <= $attempts; $i++) {

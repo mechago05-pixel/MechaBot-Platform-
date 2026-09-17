@@ -1,5 +1,8 @@
 #!/bin/bash
-set -euo pipefail
+# NOTE: no `set -e` on purpose — the web service must always start serving,
+# even if a startup step fails. The SQLite schema also self-heals on the
+# first query (see db() in api/bootstrap.php), so a failed migration is
+# never fatal for the running app.
 
 PORT="${PORT:-80}"
 
@@ -36,7 +39,9 @@ EOF
 mkdir -p /var/www/html/api/uploads /var/www/html/api/data
 chown -R www-data:www-data /var/www/html/api/uploads /var/www/html/api/data
 
-php /var/www/html/api/migrate.php
+if ! php /var/www/html/api/migrate.php; then
+    echo "WARNING: migrate.php failed; starting Apache anyway (schema self-heals on first query)." >&2
+fi
 
 # SQLite/WAL files created during migration must be writable by Apache (www-data).
 chown -R www-data:www-data /var/www/html/api/data
