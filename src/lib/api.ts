@@ -12,13 +12,18 @@ export type ApiUser = {
 type ApiEnvelope<T> = { data: T; error?: never } | { data?: never; error: { message: string } };
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    credentials: "include",
-    ...init,
-    headers: { ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }), ...init.headers },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      credentials: "include",
+      ...init,
+      headers: { ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }), ...init.headers },
+    });
+  } catch {
+    throw new Error("Server haipatikani. Hakikisha una mtandao na jaribu tena.");
+  }
   const payload = (await response.json().catch(() => ({}))) as ApiEnvelope<T>;
-  if (!response.ok || "error" in payload) throw new Error(payload.error?.message || "Request failed");
+  if (!response.ok || "error" in payload) throw new Error(payload.error?.message || `Request failed (${response.status})`);
   return payload.data;
 }
 

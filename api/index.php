@@ -60,7 +60,7 @@ if ($method === 'POST' && $path === 'auth/register') {
         $verificationCode = strtoupper(bin2hex(random_bytes(4)));
         db()->prepare(
             'INSERT INTO email_verifications (id, email, code, expires_at) 
-            VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 24 HOUR))'
+            VALUES (?, ?, ?, ' . sql_time_offset(86400) . ')'
         )->execute([uuid(), $email, $verificationCode]);
         send_verification_email($email, $fullName, $verificationCode);
     } catch (PDOException $e) {
@@ -79,7 +79,7 @@ if ($method === 'POST' && $path === 'auth/verify-email') {
     
     $stmt = db()->prepare(
         'SELECT 1 FROM email_verifications 
-        WHERE email = ? AND code = ? AND expires_at > NOW()'
+        WHERE email = ? AND code = ? AND expires_at > ' . sql_time_offset(0)
     );
     $stmt->execute([$email, $code]);
     
@@ -110,12 +110,11 @@ if ($method === 'POST' && $path === 'auth/resend-verification') {
     
     if (!$user) fail('User not found or already verified', 404);
     
-    $verificationCode = strtoupper(bin2hex(random_bytes(4)));
-    db()->prepare(
-        'INSERT INTO email_verifications (id, email, code, expires_at) 
-        VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 24 HOUR))
-        ON DUPLICATE KEY UPDATE code = VALUES(code), expires_at = VALUES(expires_at)'
-    )->execute([uuid(), $email, $verificationCode]);
+    $verificationCode = strtoupper(bin2hex(random_bytes(4)));        db()->prepare(
+            'INSERT INTO email_verifications (id, email, code, expires_at) 
+            VALUES (?, ?, ?, ' . sql_time_offset(86400) . ') '
+            . sql_upsert('ON DUPLICATE KEY UPDATE code = VALUES(code), expires_at = VALUES(expires_at)', 'ON CONFLICT(email) DO UPDATE SET code = excluded.code, expires_at = excluded.expires_at')
+        )->execute([uuid(), $email, $verificationCode]);
     
     send_verification_email($email, $user['full_name'], $verificationCode);
     
@@ -163,7 +162,7 @@ if ($method === 'GET' && $path === 'mechanics') {
     $sql = 'SELECT m.id, m.user_id, m.full_name, m.phone, m.specialties, m.garage_location, m.profile_image_url, m.rating, m.total_reviews, m.experience_years, m.tier, m.is_online, m.availability_status FROM mechanic_profiles m WHERE m.approval_status = "approved" AND m.is_blocked = 0';
     $params = [];
     if ($specialty !== '') {
-        $sql .= ' AND JSON_CONTAINS(m.specialties, JSON_QUOTE(?))';
+        $sql .= sql_upsert(' AND JSON_CONTAINS(m.specialties, JSON_QUOTE(?))', ' AND EXISTS (SELECT 1 FROM json_each(m.specialties) je WHERE je.value = ?)');
         $params[] = $specialty;
     }
     $sql .= ' ORDER BY m.is_online DESC, m.rating DESC, m.created_at DESC';
@@ -184,7 +183,7 @@ if ($method === 'POST' && $path === 'mechanics/me/location') {
     $profile->execute([$mechanic['id']]);
     $profileId = $profile->fetchColumn();
     if (!$profileId) fail('Your mechanic account is not approved', 403);
-    db()->prepare('INSERT INTO mechanic_locations (id, mechanic_id, latitude, longitude) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE latitude = VALUES(latitude), longitude = VALUES(longitude)')->execute([uuid(), $profileId, $lat, $lng]);
+    db()->prepare('INSERT INTO mechanic_locations (id, mechanic_id, latitude, longitude) VALUES (?, ?, ?, ?) ' . sql_upsert('ON DUPLICATE KEY UPDATE latitude = VALUES(latitude), longitude = VALUES(longitude)', 'ON CONFLICT(mechanic_id) DO UPDATE SET latitude = excluded.latitude, longitude = excluded.longitude'))->execute([uuid(), $profileId, $lat, $lng]);
     db()->prepare('UPDATE mechanic_profiles SET lat = ?, lng = ? WHERE id = ?')->execute([$lat, $lng, $profileId]);
     respond(['data' => ['latitude' => $lat, 'longitude' => $lng]]);
 }
@@ -224,10 +223,11 @@ if ($method === 'POST' && $path === 'mechanics/register') {
     if (!$email || $years === false || $years < 0 || $years > 80 || !is_array($specialties) || count($specialties) === 0) fail('Please provide valid mechanic registration details');
     $stmt = db()->prepare('INSERT INTO mechanic_profiles (id, user_id, full_name, nida_number, email, phone, experience_years, specialties, garage_location, lat, lng, profile_image_url, approval_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "pending")');
     $stmt->execute([uuid(), $user['id'], $fullName, $nida, $email, $phone, $years, json_encode(array_values($specialties)), $garage, (float)($data['lat'] ?? 0), (float)($data['lng'] ?? 0), $data['profile_image_url'] ?? null]);
-    db()->prepare('UPDATE users SET full_name = ?, phone = ?, role = "mechanic" WHERE id = ?')->execute([$fullName, $phone, $user['id']]);
+    db()->prepare('UPDATE users SET full_name = ?, phone = ?, role = \'mechanic\' WHERE id = ?')->execute([$fullName, $phone, $user['id']]);
     db()->prepare('UPDATE profiles SET full_name = ?, phone = ?, avatar_url = COALESCE(?, avatar_url) WHERE user_id = ?')->execute([$fullName, $phone, $data['profile_image_url'] ?? null, $user['id']]);
-    db()->prepare('UPDATE user_roles SET role = "mechanic" WHERE user_id = ? AND role = "client"')->execute([$user['id']]);
-    if (db()->query('SELECT ROW_COUNT()')->fetchColumn() === 0) db()->prepare('INSERT IGNORE INTO user_roles (id, user_id, role) VALUES (?, ?, "mechanic")')->execute([uuid(), $user['id']]);
+    $roleUpdate = db()->prepare('UPDATE user_roles SET role = \'mechanic\' WHERE user_id = ? AND role = \'client\'');
+    $roleUpdate->execute([$user['id']]);
+    if ($roleUpdate->rowCount() === 0) db()->prepare(sql_upsert('INSERT IGNORE INTO user_roles (id, user_id, role) VALUES (?, ?, ?)', 'INSERT OR IGNORE INTO user_roles (id, user_id, role) VALUES (?, ?, ?)'))->execute([uuid(), $user['id'], 'mechanic']);
     respond(['data' => ['message' => 'Registration complete']]);
 }
 
@@ -326,7 +326,7 @@ if ($method === 'GET' && $path === 'requests') {
         // - Pending requests: show ONLY if mechanic_id IS NULL and created < 30s ago
         //   (older pending requests are auto-deleted by expire_stale_requests())
         // - Once accepted by any mechanic: mechaninc_id is set, so it no longer shows as pending for others
-        $rows = db()->prepare('SELECT r.*, u.full_name AS client_name, u.phone AS client_phone FROM service_requests r JOIN users u ON u.id = r.client_id WHERE (r.mechanic_id = ? OR (r.status = "pending" AND r.created_at > DATE_SUB(NOW(), INTERVAL 30 SECOND))) AND r.status IN ("pending", "accepted", "on_the_way", "arrived", "diagnosis", "repair", "completed") AND (r.mechanic_id = ? OR r.status = "pending" AND r.mechanic_id IS NULL OR ? = 1) ORDER BY r.created_at DESC');
+        $rows = db()->prepare('SELECT r.*, u.full_name AS client_name, u.phone AS client_phone FROM service_requests r JOIN users u ON u.id = r.client_id WHERE (r.mechanic_id = ? OR (r.status = "pending" AND r.created_at > ' . sql_time_offset(-30) . ')) AND r.status IN ("pending", "accepted", "on_the_way", "arrived", "diagnosis", "repair", "completed") AND (r.mechanic_id = ? OR r.status = "pending" AND r.mechanic_id IS NULL OR ? = 1) ORDER BY r.created_at DESC');
         $rows->execute([$user['id'], $user['id'], $isOnline]);
         $requests = $rows->fetchAll();
 
@@ -379,9 +379,15 @@ if ($method === 'GET' && $path === 'messages') {
 
 if ($method === 'GET' && $path === 'conversations') {
     $user = current_user();
-    $stmt = db()->prepare('SELECT m.*, sender.full_name AS sender_name, receiver.full_name AS receiver_name FROM messages m JOIN users sender ON sender.id = m.sender_id JOIN users receiver ON receiver.id = m.receiver_id WHERE m.sender_id = ? OR m.receiver_id = ? GROUP BY m.request_id ORDER BY m.created_at DESC');
+    $stmt = db()->prepare('SELECT m.*, sender.full_name AS sender_name, receiver.full_name AS receiver_name FROM messages m JOIN users sender ON sender.id = m.sender_id JOIN users receiver ON receiver.id = m.receiver_id WHERE m.sender_id = ? OR m.receiver_id = ? ORDER BY m.created_at DESC');
     $stmt->execute([$user['id'], $user['id']]);
-    respond(['data' => $stmt->fetchAll()]);
+    $conversations = [];
+    foreach ($stmt->fetchAll() as $message) {
+        // Keep only the latest message per request (portable replacement for GROUP BY).
+        if (isset($conversations[$message['request_id']])) continue;
+        $conversations[$message['request_id']] = $message;
+    }
+    respond(['data' => array_values($conversations)]);
 }
 
 if ($method === 'POST' && $path === 'messages') {
@@ -437,7 +443,7 @@ if (preg_match('#^requests/([0-9a-f-]{36})/accept$#i', $path, $matches) && $meth
     if (!(int)$profile['is_online']) fail('You must be online to accept new requests', 403);
     db()->beginTransaction();
     try {
-        $active = db()->prepare('SELECT 1 FROM service_requests WHERE mechanic_id = ? AND status IN ("accepted", "on_the_way", "arrived", "diagnosis", "repair") FOR UPDATE');
+        $active = db()->prepare(sql_upsert('SELECT 1 FROM service_requests WHERE mechanic_id = ? AND status IN ("accepted", "on_the_way", "arrived", "diagnosis", "repair") FOR UPDATE', 'SELECT 1 FROM service_requests WHERE mechanic_id = ? AND status IN (\'accepted\', \'on_the_way\', \'arrived\', \'diagnosis\', \'repair\')'));
         $active->execute([$mechanic['id']]);
         if ($active->fetchColumn()) fail('Complete your active job before accepting another', 409);
 
@@ -479,7 +485,7 @@ if (preg_match('#^requests/([0-9a-f-]{36})/rating$#i', $path, $matches) && $meth
     $stmt->execute([$matches[1], $client['id']]);
     $mechanicId = $stmt->fetchColumn();
     if (!$mechanicId) fail('Only completed requests can be rated', 422);
-    db()->prepare('INSERT INTO mechanic_ratings (id, request_id, client_id, mechanic_id, rating, comment) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE rating = VALUES(rating), comment = VALUES(comment)')
+    db()->prepare('INSERT INTO mechanic_ratings (id, request_id, client_id, mechanic_id, rating, comment) VALUES (?, ?, ?, ?, ?, ?) ' . sql_upsert('ON DUPLICATE KEY UPDATE rating = VALUES(rating), comment = VALUES(comment)', 'ON CONFLICT(request_id) DO UPDATE SET rating = excluded.rating, comment = excluded.comment'))
         ->execute([uuid(), $matches[1], $client['id'], $mechanicId, $rating, $comment]);
     db()->prepare('UPDATE mechanic_profiles SET rating = (SELECT COALESCE(ROUND(AVG(r.rating), 1), 0) FROM mechanic_ratings r WHERE r.mechanic_id = ?), total_reviews = (SELECT COUNT(*) FROM mechanic_ratings r WHERE r.mechanic_id = ?) WHERE id = (SELECT id FROM mechanic_profiles WHERE user_id = ?)')
         ->execute([$mechanicId, $mechanicId, $mechanicId]);

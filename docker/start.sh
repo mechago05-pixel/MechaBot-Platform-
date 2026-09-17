@@ -33,9 +33,12 @@ cat > /etc/apache2/sites-available/000-default.conf <<EOF
 </VirtualHost>
 EOF
 
-mkdir -p /var/www/html/api/uploads
-chown -R www-data:www-data /var/www/html/api/uploads
+mkdir -p /var/www/html/api/uploads /var/www/html/api/data
+chown -R www-data:www-data /var/www/html/api/uploads /var/www/html/api/data
 
 php /var/www/html/api/migrate.php
+
+# SQLite/WAL files created during migration must be writable by Apache (www-data).
+chown -R www-data:www-data /var/www/html/api/data
 
 exec apache2-foreground

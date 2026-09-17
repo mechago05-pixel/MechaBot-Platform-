@@ -75,26 +75,19 @@ This project is built with:
 
 ### Render (recommended for a live site)
 
-This repo includes a production `Dockerfile` (React frontend + PHP API) and `render.yaml`.
+This repo includes a production `Dockerfile` (React frontend + PHP API + built-in SQLite database) and `render.yaml`. Everything runs in **one free web service** — no separate MySQL service and no paid plan needed.
 
 1. Push these files to GitHub (`https://github.com/mechago05-pixel/MechaBot-Platform-`).
 2. Open [Render Dashboard](https://dashboard.render.com) → **New** → **Blueprint**.
-3. Connect the GitHub repo and apply `render.yaml`.
+3. Connect the GitHub repo and apply `render.yaml` (set `DB_DRIVER=sqlite`).
 4. When Render asks for values, paste:
-   - `VITE_SUPABASE_URL`
-   - `VITE_SUPABASE_PUBLISHABLE_KEY`
-   - `VITE_SUPABASE_PROJECT_ID`
+   - `ADMIN_EMAIL` — your email; the first account registered with it becomes admin
    - Optional SMTP fields (`MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_FROM_ADDRESS`)
-5. Wait until **mechabot** and **mechabot-mysql** are live. The public URL is `https://mechabot.onrender.com` (or the URL Render shows).
-6. Email verification is off by default (`VERIFY_EMAIL_ENABLED=false`) so you can register and sign in immediately. Promote an admin in MySQL:
+5. Wait until **mechabot** is Live. The public URL is `https://mechabot.onrender.com` (or the URL Render shows).
+6. Email verification is off by default (`VERIFY_EMAIL_ENABLED=false`) so you can register and sign in immediately.
+7. To get an admin account: set `ADMIN_EMAIL` to your email **before** registering, register with that email, then manually restart the service once (Render Dashboard → Manual Deploy → Restart) to promote it. The SQLite data file lives at `api/data/mechabot.sqlite` inside the service; note that free instances lose local files on redeploy, so re-register if the database is reset.
 
-```sql
-UPDATE users SET role = 'admin' WHERE email = 'your@email.com';
-INSERT IGNORE INTO user_roles (id, user_id, role)
-SELECT UUID(), id, 'admin' FROM users WHERE email = 'your@email.com';
-```
-
-MySQL on Render needs a paid **Starter** instance because it uses a persistent disk. The website and API run in one Docker web service and talk to MySQL on Render's private network.
+The database schema is created automatically on first start (`api/migrate.php` handles both SQLite and MySQL). If you later upgrade to a paid plan, uncomment the `mechabot-mysql` block in `render.yaml` and set `DB_DRIVER=mysql` to switch back to MySQL.
 
 ### Deploy the frontend to Vercel
 

@@ -24,6 +24,7 @@ RUN composer install --no-dev --no-interaction --no-scripts --prefer-dist
 FROM php:8.3-apache
 WORKDIR /var/www/html
 RUN docker-php-ext-install pdo pdo_mysql \
+    && docker-php-ext-enable pdo_sqlite \
     && a2enmod rewrite \
     && echo "ServerName localhost" >> /etc/apache2/apache2.conf
 
@@ -33,8 +34,8 @@ COPY --from=phpdeps /app/vendor /var/www/html/api/vendor
 COPY --from=frontend /app/dist /var/www/html
 COPY docker/start.sh /usr/local/bin/start.sh
 RUN chmod +x /usr/local/bin/start.sh \
-    && mkdir -p /var/www/html/api/uploads \
-    && chown -R www-data:www-data /var/www/html/api/uploads
+    && mkdir -p /var/www/html/api/uploads /var/www/html/api/data \
+    && chown -R www-data:www-data /var/www/html/api/uploads /var/www/html/api/data
 
 EXPOSE 80
 CMD ["/usr/local/bin/start.sh"]

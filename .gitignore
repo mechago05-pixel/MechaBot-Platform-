@@ -16,6 +16,8 @@ api/.env
 api/vendor
 api/uploads/*
 !api/uploads/.gitkeep
+api/data/*.sqlite
+api/data/*.sqlite-*
 
 # Editor directories and files
 .vscode/*
