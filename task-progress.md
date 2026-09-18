@@ -25,6 +25,18 @@
 - [ ] Optional: client clock-skew handling via /api/time (timestamps now parse correctly, but a wrong device clock can still skew countdowns)
 - [ ] Optional: persistent disk/MySQL on Render so data survives redeploys
 
+## CUSTOM DOMAIN: mechabot.is-a.dev (2026-09-18)
+
+- User wanted mechabot.onrender.com — impossible: Render always appends a random suffix
+  to onrender.com subdomains and they cannot be renamed after creation.
+- Solution in progress: free subdomain **mechabot.is-a.dev** from is-a.dev:
+  - PR submitted: https://github.com/is-a-dev/register/pull/52990 (CNAME → mechabot-7pha.onrender.com)
+  - PR needs maintainer approval + merge (usually hours to a couple of days). If a maintainer
+    requests changes, check the PR comments and respond.
+  - Render custom domain added (cdm-damnv20473hc73cjdcfg, status unverified → verifies once DNS goes live)
+  - APP_URL env var set to https://mechabot.is-a.dev so email links use the new domain
+- Once merged: https://mechabot.is-a.dev serves the app (SSL automatic). Old URL keeps working.
+
 ## NEXT SESSION: Enable email verification via Brevo (2026-09-18 status)
 
 **Goal:** user wants: sign-up writes own email+password → verification code arrives in their own Gmail → sign-in is BLOCKED (403) until they verify.
