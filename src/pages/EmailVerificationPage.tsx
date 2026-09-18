@@ -1,15 +1,18 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { ArrowLeft, Mail, CheckCircle2, Loader2 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/lib/i18n";
+import { api } from "@/lib/api";
 
 const EmailVerificationPage = () => {
   const navigate = useNavigate();
+  const [params] = useSearchParams();
   const { t } = useI18n();
 
-  const [code, setCode] = useState("");
+  const [code, setCode] = useState(params.get("code") || "");
+  const [email, setEmail] = useState(params.get("email") || "");
   const [loading, setLoading] = useState(false);
   const [verified, setVerified] = useState(false);
   const [error, setError] = useState("");
@@ -26,30 +29,49 @@ const EmailVerificationPage = () => {
     return () => clearTimeout(timer);
   }, [countdown]);
 
-  const handleResend = () => {
+  const handleResend = async () => {
+    if (!email.trim()) {
+      setResendMsg("Enter your email first.");
+      return;
+    }
     setCanResend(false);
     setCountdown(60);
-    setResendMsg(t("codeSent"));
-    setTimeout(() => setResendMsg(""), 3000);
+    setResendMsg("");
+    try {
+      await api.post("/auth/resend-verification", { email: email.trim() });
+      setResendMsg("Verification code sent. Check your inbox.");
+    } catch (err) {
+      setResendMsg(err instanceof Error ? err.message : "Could not resend code.");
+      setCanResend(true);
+      setCountdown(0);
+    }
+    setTimeout(() => setResendMsg(""), 5000);
   };
 
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
 
-    if (code.length !== 6) {
-      setError(t("invalidCode"));
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      setError("Enter the email you registered with.");
+      return;
+    }
+    if (code.length < 6) {
+      setError("Enter the code from your email.");
       return;
     }
 
     setLoading(true);
-    // Simulate verification (frontend-only)
-    await new Promise((r) => setTimeout(r, 1500));
-    setLoading(false);
-
-    // Mock: any 6-digit code is accepted
-    setVerified(true);
-    setTimeout(() => navigate("/home"), 2000);
+    try {
+      await api.post("/auth/verify-email", { email: cleanEmail, code: code.trim().toUpperCase() });
+      setVerified(true);
+      setTimeout(() => navigate("/login", { replace: true }), 2000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Verification failed. Please try again.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (verified) {
@@ -63,8 +85,8 @@ const EmailVerificationPage = () => {
         >
           <CheckCircle2 className="w-10 h-10 text-primary" />
         </motion.div>
-        <h2 className="font-display text-xl font-bold text-foreground mb-2">{t("verifyEmail")}</h2>
-        <p className="text-sm text-primary font-medium">{t("codeSent")}</p>
+        <h2 className="font-display text-xl font-bold text-foreground mb-2">Email verified!</h2>
+        <p className="text-sm text-primary font-medium">You can now sign in.</p>
       </div>
     );
   }
@@ -88,16 +110,27 @@ const EmailVerificationPage = () => {
         </div>
 
         <h2 className="font-display text-2xl font-bold text-foreground mb-2 text-center">{t("verifyEmail")}</h2>
-        <p className="text-sm text-muted-foreground text-center mb-8 max-w-xs">{t("verifyDesc")}</p>
+        <p className="text-sm text-muted-foreground text-center mb-8 max-w-xs">
+          Enter the 8-character code we emailed you. It expires in 24 hours.
+        </p>
 
         <form onSubmit={handleVerify} className="w-full max-w-sm space-y-4">
           <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@example.com"
+            autoComplete="email"
+            className="w-full h-12 rounded-2xl bg-card border border-border px-4 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+          />
+
+          <input
             type="text"
             value={code}
-            onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-            placeholder="000000"
-            maxLength={6}
-            className="w-full h-14 rounded-2xl bg-card border border-border text-center text-2xl font-display font-bold tracking-[0.5em] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+            onChange={(e) => setCode(e.target.value.toUpperCase().slice(0, 8))}
+            placeholder="XXXXXXXX"
+            maxLength={8}
+            className="w-full h-14 rounded-2xl bg-card border border-border text-center text-2xl font-display font-bold tracking-[0.4em] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
           />
 
           {error && <p className="text-[11px] text-destructive text-center">{error}</p>}

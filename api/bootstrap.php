@@ -383,8 +383,11 @@ function mailer(): \PHPMailer\PHPMailer\PHPMailer
             $mailer->Username = env_value('MAIL_USERNAME', '');
             $mailer->Password = env_value('MAIL_PASSWORD', '');
             $mailer->CharSet = 'UTF-8';
+            // Gmail (and most SMTP providers) reject mail whose From address does
+            // not match the authenticated account, so fall back to MAIL_USERNAME.
+            $fromAddress = env_value('MAIL_FROM_ADDRESS', '') ?: env_value('MAIL_USERNAME', 'noreply@mechabot.local');
             $mailer->setFrom(
-                env_value('MAIL_FROM_ADDRESS', 'noreply@mechabot.local'),
+                $fromAddress,
                 env_value('MAIL_FROM_NAME', 'MechaBot Platform')
             );
         } catch (\PHPMailer\PHPMailer\Exception $e) {

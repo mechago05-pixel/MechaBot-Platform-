@@ -98,11 +98,14 @@ const LoginPage = () => {
         </div>
         <h1 className="font-display text-2xl font-bold text-foreground text-center mb-2">{t("checkEmail")}</h1>
         <p className="text-sm text-muted-foreground text-center leading-6 mb-7">
-          We sent a confirmation link to <span className="font-medium text-foreground">{email}</span>. Confirm your email, then sign in to continue.
+          We sent a verification code to <span className="font-medium text-foreground">{email}</span>. Enter it to activate your account, then sign in.
         </p>
-          <Button variant="hero" size="lg" className="w-full" onClick={goToLogin}>
-          {t("signIn")}
+          <Button variant="hero" size="lg" className="w-full" onClick={() => navigate(`/verify-email?email=${encodeURIComponent(email)}`)}>
+          Enter verification code
         </Button>
+        <button type="button" onClick={goToLogin} className="mt-4 text-sm text-muted-foreground hover:text-foreground">
+          {t("signIn")} later
+        </button>
       </AuthShell>
     );
   }
