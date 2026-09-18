@@ -65,6 +65,12 @@ const LoginPage = () => {
         : await signIn(email.trim(), password);
 
       if (error) {
+        // Unverified account: send the user straight to the code entry page.
+        if (!isSignUp && /verify your email/i.test(error.message)) {
+          toast({ title: "Verify your email first", description: "Enter the code we emailed you to activate your account." });
+          navigate(`/verify-email?email=${encodeURIComponent(email.trim())}`);
+          return;
+        }
         toast({ title: "Error", description: error.message, variant: "destructive" });
         return;
       }
