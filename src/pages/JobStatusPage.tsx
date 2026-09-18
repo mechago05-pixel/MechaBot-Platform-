@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, Check, Clock, Truck, CheckCircle2, Phone, MessageSquare, Car, ShieldCheck, MapPin, Wrench, Search } from "lucide-react";
+import { ArrowLeft, Check, Clock, Truck, CheckCircle2, Phone, MessageSquare, Car, ShieldCheck, MapPin, Wrench, Search, XCircle, RotateCcw } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import LiveTrackingMap from "@/components/LiveTrackingMap";
@@ -77,6 +77,23 @@ const JobStatusPage = () => {
 
   if (loading) return <div className="min-h-screen bg-background flex justify-center items-center"><div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>;
   if (!request) return <div className="min-h-screen bg-background flex justify-center items-center px-6 text-muted-foreground">Order not found.</div>;
+
+  if (request.status === "expired") {
+    return (
+      <main className="min-h-screen bg-background flex flex-col items-center justify-center px-6">
+        <div className="rounded-2xl bg-card border border-border p-8 max-w-md w-full text-center space-y-4 shadow-sm">
+          <div className="w-14 h-14 rounded-full bg-destructive/10 flex items-center justify-center mx-auto">
+            <XCircle className="w-7 h-7 text-destructive" />
+          </div>
+          <h1 className="text-lg font-bold text-foreground">No mechanic took this request</h1>
+          <p className="text-sm text-muted-foreground">Your request expired because no mechanic accepted it within 30 seconds. Please try again — new nearby mechanics are notified instantly.</p>
+          <Button className="w-full h-11 rounded-xl" onClick={() => navigate("/select-problem", { replace: true })}>
+            <RotateCcw className="w-4 h-4 mr-2" /> Try Again
+          </Button>
+        </div>
+      </main>
+    );
+  }
 
   const currentStatus = request.status;
   const current = steps.findIndex((step) => step.id === currentStatus);

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
-import { CheckCircle2, Clock, XCircle, ArrowRight } from "lucide-react";
+import { CheckCircle2, Clock, XCircle, TimerOff, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import BottomNav from "@/components/BottomNav";
 import { useI18n } from "@/lib/i18n";
@@ -48,6 +48,7 @@ const HistoryPage = () => {
     arrived: { icon: Clock, label: "Arrived", className: "text-teal-500 bg-teal-500/10" },
     diagnosis: { icon: Clock, label: "Diagnosis", className: "text-amber-500 bg-amber-500/10" },
     repair: { icon: Clock, label: "Repair", className: "text-orange-500 bg-orange-500/10" },
+    expired: { icon: TimerOff, label: "Expired", className: "text-muted-foreground bg-muted" },
   };
 
   const formatCategory = (cat: string) => cat.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());

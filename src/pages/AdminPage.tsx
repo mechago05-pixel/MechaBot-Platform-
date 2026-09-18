@@ -104,6 +104,7 @@ const AdminPage = () => {
   const totalRequests = requests.length;
   const pendingRequests = requests.filter((r) => r.status === "pending").length;
   const completedRequests = requests.filter((r) => r.status === "completed").length;
+  const expiredRequests = requests.filter((r) => r.status === "expired").length;
 
   const statusColor: Record<string, string> = {
     pending: "bg-warning/20 text-warning",
@@ -111,6 +112,7 @@ const AdminPage = () => {
     rejected: "bg-destructive/20 text-destructive",
     in_progress: "bg-info/20 text-info",
     completed: "bg-primary/20 text-primary",
+    expired: "bg-muted text-muted-foreground",
   };
 
   if (loading) {
@@ -401,6 +403,7 @@ const AdminPage = () => {
                 { label: "Total Requests", value: totalRequests, color: "text-info" },
                 { label: "Pending", value: pendingRequests, color: "text-warning" },
                 { label: "Completed", value: completedRequests, color: "text-primary" },
+                { label: "Expired", value: expiredRequests, color: "text-destructive" },
                 { label: "Mechanics Online", value: mechanics.filter((m) => m.is_online).length, color: "text-primary" },
               ].map((stat) => (
                 <div key={stat.label} className="rounded-2xl bg-card border border-border p-4 text-center">
@@ -412,7 +415,7 @@ const AdminPage = () => {
 
             <div className="rounded-2xl bg-card border border-border p-4">
               <h4 className="text-sm font-semibold text-foreground mb-3">Request Status Breakdown</h4>
-              {["pending", "in_progress", "completed"].map((status) => {
+              {["pending", "in_progress", "completed", "expired"].map((status) => {
                 const count = requests.filter((r) => r.status === status).length;
                 const pct = totalRequests > 0 ? (count / totalRequests) * 100 : 0;
                 return (
@@ -427,7 +430,7 @@ const AdminPage = () => {
                         animate={{ width: `${pct}%` }}
                         transition={{ duration: 0.6 }}
                         className={`h-full rounded-full ${
-                          status === "pending" ? "bg-warning" : status === "completed" ? "bg-primary" : "bg-info"
+                          status === "pending" ? "bg-warning" : status === "completed" ? "bg-primary" : status === "expired" ? "bg-destructive" : "bg-info"
                         }`}
                       />
                     </div>

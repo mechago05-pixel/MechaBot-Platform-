@@ -347,9 +347,10 @@ function haversine_km(float $lat1, float $lng1, float $lat2, float $lng2): float
 
 function expire_stale_requests(): void
 {
-    // Delete pending requests older than 30 seconds entirely.
-    // If no mechanic accepted, the request is invalid and should not be stored anywhere.
-    db()->prepare('DELETE FROM service_requests WHERE status = "pending" AND created_at < ' . sql_time_offset(-30))->execute();
+    // Mark pending requests older than 30 seconds as expired instead of deleting them.
+    // Mechanics never see expired requests (their queries filter status IN (...)), but the
+    // admin dashboard keeps a record of every request ever made.
+    db()->prepare('UPDATE service_requests SET status = "expired" WHERE status = "pending" AND created_at < ' . sql_time_offset(-30))->execute();
 }
 
 function create_notification(string $userId, string $type, string $message): void
