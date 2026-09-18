@@ -398,21 +398,82 @@ function mailer(): \PHPMailer\PHPMailer\PHPMailer
 }
 
 /**
+ * Send an email through Brevo's HTTPS API (https://api.brevo.com/v3/smtp/email).
+ * Render's free tier blocks outbound SMTP ports, so HTTP delivery is the
+ * reliable path in production; SMTP remains the fallback elsewhere.
+ */
+function send_email_via_brevo(string $toEmail, string $toName, string $subject, string $htmlBody, string $altBody): bool
+{
+    $apiKey = (string) env_value('BREVO_API_KEY', '');
+    if ($apiKey === '') return false;
+
+    $fromAddress = env_value('MAIL_FROM_ADDRESS', '') ?: env_value('MAIL_USERNAME', 'noreply@mechabot.local');
+    $fromName = env_value('MAIL_FROM_NAME', 'MechaBot Platform');
+
+    $payload = json_encode([
+        'sender'      => ['name' => $fromName, 'email' => $fromAddress],
+        'to'          => [['name' => $toName !== '' ? $toName : $toEmail, 'email' => $toEmail]],
+        'subject'     => $subject,
+        'htmlContent' => $htmlBody,
+        'textContent' => $altBody,
+    ]);
+
+    $ch = curl_init('https://api.brevo.com/v3/smtp/email');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => $payload,
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_HTTPHEADER     => [
+            'accept: application/json',
+            'content-type: application/json',
+            'api-key: ' . $apiKey,
+        ],
+    ]);
+    $response = curl_exec($ch);
+    $status   = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    $error    = curl_error($ch);
+    curl_close($ch);
+
+    if ($status >= 200 && $status < 300) return true;
+    error_log("Brevo email error (HTTP {$status}): " . substr((string) $response, 0, 300) . ' ' . $error);
+    return false;
+}
+
+/**
+ * Deliver an email via Brevo when configured, otherwise via SMTP (PHPMailer).
+ */
+function deliver_email(string $toEmail, string $toName, string $subject, string $htmlBody, string $altBody): bool
+{
+    if (send_email_via_brevo($toEmail, $toName, $subject, $htmlBody, $altBody)) return true;
+
+    try {
+        $mail = mailer();
+        $mail->clearAddresses();
+        $mail->addAddress($toEmail, $toName);
+        $mail->isHTML(true);
+        $mail->Subject = $subject;
+        $mail->Body = $htmlBody;
+        $mail->AltBody = $altBody;
+        return $mail->send();
+    } catch (\Exception $e) {
+        error_log("Email send error: " . $e->getMessage());
+        return false;
+    }
+}
+
+/**
  * Send email with verification code
  */
 function send_verification_email(string $email, string $fullName, string $verificationCode): bool
 {
     try {
-        $mail = mailer();
-        $mail->clearAddresses();
-        $mail->addAddress($email, $fullName);
-        $mail->isHTML(true);
-        $mail->Subject = 'Verify Your Email - MechaBot Platform';
+        $subject = 'Verify Your Email - MechaBot Platform';
         
         $appUrl = env_value('APP_URL', env_value('RENDER_EXTERNAL_URL', 'http://localhost:5173'));
         $verificationLink = $appUrl . '/verify-email?code=' . urlencode($verificationCode) . '&email=' . urlencode($email);
         
-        $mail->Body = <<<HTML
+        $htmlBody = <<<HTML
 <!DOCTYPE html>
 <html>
 <head>
@@ -453,8 +514,8 @@ function send_verification_email(string $email, string $fullName, string $verifi
 </html>
 HTML;
         
-        $mail->AltBody = "Welcome to MechaBot! Your verification code is: {$verificationCode}";
-        return $mail->send();
+        $altBody = "Welcome to MechaBot! Your verification code is: {$verificationCode}";
+        return deliver_email($email, $fullName, $subject, $htmlBody, $altBody);
     } catch (\Exception $e) {
         error_log("Email send error: " . $e->getMessage());
         return false;
@@ -467,16 +528,12 @@ HTML;
 function send_password_reset_email(string $email, string $fullName, string $resetCode): bool
 {
     try {
-        $mail = mailer();
-        $mail->clearAddresses();
-        $mail->addAddress($email, $fullName);
-        $mail->isHTML(true);
-        $mail->Subject = 'Reset Your Password - MechaBot Platform';
+        $subject = 'Reset Your Password - MechaBot Platform';
         
         $appUrl = env_value('APP_URL', env_value('RENDER_EXTERNAL_URL', 'http://localhost:5173'));
         $resetLink = $appUrl . '/reset-password?code=' . urlencode($resetCode) . '&email=' . urlencode($email);
         
-        $mail->Body = <<<HTML
+        $htmlBody = <<<HTML
 <!DOCTYPE html>
 <html>
 <head>
@@ -516,8 +573,8 @@ function send_password_reset_email(string $email, string $fullName, string $rese
 </html>
 HTML;
         
-        $mail->AltBody = "Password reset code: {$resetCode}";
-        return $mail->send();
+        $altBody = "Password reset code: {$resetCode}";
+        return deliver_email($email, $fullName, $subject, $htmlBody, $altBody);
     } catch (\Exception $e) {
         error_log("Email send error: " . $e->getMessage());
         return false;
@@ -530,10 +587,6 @@ HTML;
 function send_mechanic_approval_email(string $email, string $fullName, bool $approved): bool
 {
     try {
-        $mail = mailer();
-        $mail->clearAddresses();
-        $mail->addAddress($email, $fullName);
-        $mail->isHTML(true);
         
         $status = $approved ? 'Approved' : 'Rejected';
         $color = $approved ? '#28a745' : '#dc3545';
@@ -542,8 +595,8 @@ function send_mechanic_approval_email(string $email, string $fullName, bool $app
             : 'Unfortunately, your mechanic profile application was not approved. Please review and reapply.';
         
         $appUrl = env_value('APP_URL', env_value('RENDER_EXTERNAL_URL', 'http://localhost:5173'));
-        $mail->Subject = "Mechanic Profile {$status} - MechaBot Platform";
-        $mail->Body = <<<HTML
+        $subject = "Mechanic Profile {$status} - MechaBot Platform";
+        $htmlBody = <<<HTML
 <!DOCTYPE html>
 <html>
 <head>
@@ -578,8 +631,8 @@ function send_mechanic_approval_email(string $email, string $fullName, bool $app
 </html>
 HTML;
         
-        $mail->AltBody = "Your mechanic profile has been {$status}.";
-        return $mail->send();
+        $altBody = "Your mechanic profile has been {$status}.";
+        return deliver_email($email, $fullName, $subject, $htmlBody, $altBody);
     } catch (\Exception $e) {
         error_log("Email send error: " . $e->getMessage());
         return false;
