@@ -53,6 +53,12 @@ if ($method === 'POST' && $path === 'auth/register') {
         db()->prepare('INSERT INTO profiles (id, user_id, full_name, phone) VALUES (?, ?, ?, ?)')->execute([uuid(), $id, $fullName, $phone]);
         db()->prepare('INSERT INTO user_roles (id, user_id, role) VALUES (?, ?, ?)')->execute([uuid(), $id, $role]);
 
+        // Auto-promote the ADMIN_EMAIL account on registration (no restart needed).
+        if ($email === strtolower(trim((string) env_value('ADMIN_EMAIL', '')))) {
+            db()->prepare("UPDATE users SET role = 'admin' WHERE id = ?")->execute([$id]);
+            db()->prepare("UPDATE user_roles SET role = 'admin' WHERE user_id = ?")->execute([$id]);
+        }
+
         if ($verified === 1) {
             respond(['data' => ['message' => 'Account created. You can sign in now.']], 201);
         }
