@@ -32,3 +32,15 @@ export const api = {
   post: <T>(path: string, data?: unknown) => request<T>(path, { method: "POST", body: JSON.stringify(data ?? {}) }),
   upload: <T>(path: string, data: FormData) => request<T>(path, { method: "POST", body: data }),
 };
+
+/**
+ * Parse a timestamp returned by the PHP API (UTC, e.g. "2026-09-18 16:04:47").
+ * Browsers parse such strings as LOCAL time, which shifts everything by the
+ * timezone offset (UTC+3 in Tanzania) and breaks all elapsed-time math — e.g.
+ * the 30-second request countdown expiring instantly. Always parse as UTC.
+ */
+export function parseServerDate(value: string | null | undefined): Date {
+  if (!value) return new Date(NaN);
+  const iso = value.includes("T") ? value : value.replace(" ", "T");
+  return new Date(/[zZ]$|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : `${iso}Z`);
+}

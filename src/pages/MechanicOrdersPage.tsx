@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useAuth } from "@/lib/auth";
-import { api } from "@/lib/api";
+import { api, parseServerDate } from "@/lib/api";
 import { toast } from "@/hooks/use-toast";
 import { useOrderAlarm } from "@/hooks/use-order-alarm";
 
@@ -70,8 +70,8 @@ const MechanicOrdersPage = () => {
   const visibleRequests = requests.filter((request) => {
     if (!user) return false;
     if (request.status === "pending") {
-      // Client-side safety: discard pending requests older than 30 seconds
-      const createdAt = new Date(request.created_at).getTime();
+      // Client-side safety: discard pending requests older than 30 seconds (created_at is UTC)
+      const createdAt = parseServerDate(request.created_at).getTime();
       if (createdAt < Date.now() - 30_000) return false;
       return request.mechanic_id === null || request.mechanic_id === user.id;
     }

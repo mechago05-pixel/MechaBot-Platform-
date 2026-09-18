@@ -7,7 +7,7 @@ import { Switch } from "@/components/ui/switch";
 import { useOrderAlarm } from "@/hooks/use-order-alarm";
 import { useI18n } from "@/lib/i18n";
 import { useTheme } from "@/lib/theme";
-import { api } from "@/lib/api";
+import { api, parseServerDate } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
 
@@ -84,9 +84,10 @@ const MechanicDashboardPage = () => {
       const cutoff = Date.now() - 30_000; // 30 seconds ago
       setIncomingOrders(
         requests.filter((request) => {
-          // Client-side safety: discard pending requests older than 30 seconds
+          // Client-side safety: discard pending requests older than 30 seconds.
+          // created_at comes from the server in UTC — parse it as UTC, not local time.
           if (request.status === "pending") {
-            const createdAt = new Date(request.created_at).getTime();
+            const createdAt = parseServerDate(request.created_at).getTime();
             if (createdAt < cutoff) return false;
             return request.mechanic_id === null || request.mechanic_id === user.id;
           }
@@ -110,6 +111,27 @@ const MechanicDashboardPage = () => {
     const timer = window.setInterval(loadOrders, 10000);
     return () => window.clearInterval(timer);
   }, [profile?.id, profile?.approval_status, user?.id]);
+
+  // Share the mechanic's live location with the server while online so that
+  // clients can track the mechanic and nearby matching keeps working — this
+  // used to happen only inside MechanicMapPage.
+  useEffect(() => {
+    if (!profile || !profile.is_online || profile.approval_status !== "approved") return;
+    if (!("geolocation" in navigator)) return;
+    const push = async (lat: number, lng: number) => {
+      try {
+        await api.post("/mechanics/me/location", { latitude: lat, longitude: lng });
+      } catch {
+        // Non-fatal: location sharing is best-effort.
+      }
+    };
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => push(pos.coords.latitude, pos.coords.longitude),
+      () => undefined,
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+    );
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [profile?.id, profile?.is_online, profile?.approval_status]);
 
   const hasActiveOrder = incomingOrders.some((o) => activeStatuses.includes(o.status));
 

@@ -3,7 +3,7 @@ import { motion } from "framer-motion";
 import { ArrowLeft, CheckCircle2, Loader2, Wrench } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { api } from "@/lib/api";
+import { api, parseServerDate } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { toast } from "@/hooks/use-toast";
 
@@ -19,7 +19,7 @@ const NearbyMechanicsPage = () => {
 
   const secondsRemaining = useMemo(() => {
     if (!request || request.status !== "pending") return 0;
-    const elapsed = Math.floor((Date.now() - new Date(request.created_at).getTime()) / 1000);
+    const elapsed = Math.floor((Date.now() - parseServerDate(request.created_at).getTime()) / 1000);
     return Math.max(0, 30 - elapsed);
   }, [request]);
 
@@ -79,7 +79,7 @@ const NearbyMechanicsPage = () => {
 
     const interval = window.setInterval(() => {
       if (request.status !== "pending") return;
-      const elapsed = Math.floor((Date.now() - new Date(request.created_at).getTime()) / 1000);
+      const elapsed = Math.floor((Date.now() - parseServerDate(request.created_at).getTime()) / 1000);
       if (elapsed >= 30) {
         toast({ title: "Request expired", description: "No mechanic accepted your request in time.", variant: "destructive" });
         navigate("/home", { replace: true });

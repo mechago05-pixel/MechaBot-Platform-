@@ -36,6 +36,12 @@ if ($method === 'GET' && $path === 'health') {
 
 expire_stale_requests();
 
+if ($method === 'GET' && $path === 'time') {
+    // Lets the browser compute the server clock offset so countdowns and
+    // "new order" detection survive device clock skew.
+    respond(['data' => ['now' => gmdate('Y-m-d H:i:s')]]);
+}
+
 if ($method === 'POST' && $path === 'auth/register') {
     $data = json_input();
     $email = filter_var(strtolower(trim((string)($data['email'] ?? ''))), FILTER_VALIDATE_EMAIL);
